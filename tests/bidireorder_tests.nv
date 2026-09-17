@@ -1,0 +1,228 @@
+// bidireorder_tests.nv — L1 and L2: the per-LINE half of the
+// algorithm, and the two refusals that keep it per-line.
+//
+// RED ON PURPOSE.
+//
+// THE ORACLE IS `BidiCharacterTest.txt` again, and this suite reads
+// the two columns the other suite does not assert against: field 4,
+// the resolved level per character with `x` where X9 removed it, and
+// field 5, the surviving characters in visual order.  Field 5 is
+// exactly what `bidireorder.reorder_line` answers, which is why the
+// permutation is the published form and a display string is not.
+//
+// The reader here is the small one: two accessors over the two
+// columns, because that is all this suite needs and because the
+// implementation lane will want them separately when it bisects a
+// failing vector.
+
+use std.test
+use bidierror
+use bidimirror
+use bidipara
+use bidireorder
+
+// Two lines of `BidiCharacterTest.txt`, copied unaltered.  The second
+// is the one that shows `x`: U+202B is an RLE and U+202C is a PDF,
+// and X9 removes both.
+fn line_vectors() -> [Str]
+    ["05D0 05D1 05D2;2;1;1 1 1;2 1 0",
+     "0061 202B 05D0 202C 0062;0;0;0 x 1 x 0;0 2 4"]
+
+// A whitespace-separated field, with the empty pieces dropped.
+fn order_words(s: Str) -> [Str]
+    list.filter(str.split(str.trim(s), " "), piece => str.is_empty(piece) == false)
+
+// Field 4: one level per character, `"x"` where X9 removed it.
+fn expected_levels(line: Str) -> [Str]
+    order_words(str.split(line, ";")[3])
+
+// One decimal field, or -1 when it is not a number.
+//
+// A named function rather than a lambda: a `??` inside a lambda passed
+// to `list.map` segfaults under LLVM — filed as
+// codegen-llvm/optional-unwrap-inside-a-lambda-segfaults.
+fn decimal_value(d: Str) -> Int
+    str.to_int(d) ?? 0 - 1
+
+// Field 5: the surviving characters, in visual order.
+fn expected_order(line: Str) -> [Int]
+    list.map(order_words(str.split(line, ";")[4]), decimal_value)
+
+@test
+fn test_the_conformance_columns_parse_and_are_the_published_shape() [io]
+    test.case("field 4 has one entry per character and field 5 only the survivors")
+    let plain = line_vectors()[0]
+    test.assert(list.len(expected_levels(plain)) == 3)
+    test.assert(list.len(expected_order(plain)) == 3)
+    test.assert(expected_order(plain)[0] == 2)
+
+    test.case("a vector with embeddings marks them `x` and leaves them out of the order")
+    let embedded = line_vectors()[1]
+    test.assert(list.len(expected_levels(embedded)) == 5)
+    test.assert(expected_levels(embedded)[1] == "x")
+    test.assert(expected_levels(embedded)[3] == "x")
+    test.assert(list.len(expected_order(embedded)) == 3)
+    test.assert(expected_order(embedded)[1] == 2)
+
+    test.case("and the package answers field 5 for the first of them")
+    // Three Hebrew letters with an auto paragraph direction.  The
+    // first assertion that reaches the package.
+    match bidipara.resolve("אבג", BidiBaseAuto)
+        Err(_) => test.fail("three Hebrew letters are one paragraph")
+        Ok(p)  =>
+            match bidireorder.reorder_line(p, 0, 3)
+                Err(_) => test.fail("0 to 3 is a line of a three-character paragraph")
+                Ok(o)  =>
+                    test.assert(list.len(o) == 3)
+                    test.assert(o[0] == expected_order(plain)[0])
+                    test.assert(o[1] == expected_order(plain)[1])
+                    test.assert(o[2] == expected_order(plain)[2])
+
+    test.case("and field 5 again for the vector whose embeddings are removed")
+    match bidipara.resolve("a‫א‬b", BidiBaseLtr)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            match bidireorder.visible_indices(p, 0, 5)
+                Err(_) => test.fail("0 to 5 is a line of a five-character paragraph")
+                Ok(v)  =>
+                    test.assert(list.len(v) == 3)
+                    test.assert(v[0] == 0)
+                    test.assert(v[1] == 2)
+                    test.assert(v[2] == 4)
+
+@test
+fn test_l1_is_defined_over_the_original_classes() [io]
+    // A tab between two Hebrew words in a LEFT-TO-RIGHT paragraph.
+    // N1 gives the tab and the space before it the direction of the
+    // Hebrew on both sides, so I1 raises them to level 1 — and then
+    // L1 resets a segment separator, and the whitespace before it,
+    // to the paragraph level.  The reset is decided by the tab's
+    // ORIGINAL class, which the resolution has not kept anywhere
+    // else.
+    let text = "אב \tגד"
+
+    test.case("before L1 the space and the tab sit at the raised level")
+    match bidipara.resolve(text, BidiBaseLtr)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            test.assert(bidipara.char_count(p) == 6)
+            test.assert(p.levels[2] == 1)
+            test.assert(p.levels[3] == 1)
+
+    test.case("and L1 puts both back at the paragraph level")
+    match bidipara.resolve(text, BidiBaseLtr)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            match bidireorder.line_levels(p, 0, 6)
+                Err(_) => test.fail("0 to 6 is a line of a six-character paragraph")
+                Ok(ls) =>
+                    test.assert(list.len(ls) == 6)
+                    test.assert(ls[2] == 0)
+                    test.assert(ls[3] == 0)
+                    test.assert(ls[0] == 1)
+
+@test
+fn test_the_visual_order_has_an_inverse_and_a_caret_needs_it() [io]
+    test.case("a left-to-right line is drawn in the order it is stored")
+    match bidipara.resolve("abc", BidiBaseAuto)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            match bidireorder.reorder_line(p, 0, 3)
+                Err(_) => test.fail("0 to 3 is a line of a three-character paragraph")
+                Ok(o)  =>
+                    test.assert(o[0] == 0)
+                    test.assert(o[2] == 2)
+
+    test.case("a right-to-left line is drawn backwards, and both maps say so")
+    match bidipara.resolve("אבג", BidiBaseAuto)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            match bidireorder.reorder_line(p, 0, 3)
+                Err(_) => test.fail("0 to 3 is a line of a three-character paragraph")
+                Ok(o)  => test.assert(o[0] == 2)
+            match bidireorder.logical_to_visual(p, 0, 3)
+                Err(_) => test.fail("0 to 3 is a line of a three-character paragraph")
+                Ok(v)  =>
+                    test.assert(v[0] == 2)
+                    test.assert(v[2] == 0)
+
+    test.case("the identity question is cheaper and is not `is the paragraph ltr`")
+    match bidipara.resolve("plain text", BidiBaseLtr)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            match bidireorder.is_identity_order(p, 0, 10)
+                Err(_) => test.fail("0 to 10 is a line of a ten-character paragraph")
+                Ok(b)  => test.assert(b)
+
+    test.case("a wholly right-to-left line is one run and is still reversed")
+    match bidipara.resolve("אבג", BidiBaseRtl)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            match bidireorder.is_identity_order(p, 0, 3)
+                Err(_) => test.fail("0 to 3 is a line of a three-character paragraph")
+                Ok(b)  => test.assert(b == false)
+
+@test
+fn test_a_line_is_a_range_of_a_paragraph_and_is_checked_as_one() [io]
+    // The two refusals exist so that a caller who resolved one text
+    // and reordered another is told, rather than clamped into an
+    // answer that looks plausible.
+    test.case("a range past the end of the paragraph is refused by name")
+    match bidipara.resolve("abc", BidiBaseAuto)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            match bidireorder.reorder_line(p, 0, 99)
+                Ok(_)  => test.fail("99 is not inside a three-character paragraph")
+                Err(e) =>
+                    test.assert(bidierror.code(e) == "line-out-of-range")
+                    test.assert(bidierror.is_text_fault(e) == false)
+
+    test.case("a range that runs backwards is a different refusal")
+    match bidipara.resolve("abc", BidiBaseAuto)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            match bidireorder.reorder_line(p, 2, 1)
+                Ok(_)  => test.fail("a line cannot end before it starts")
+                Err(e) => test.assert(bidierror.code(e) == "line-reversed")
+
+    test.case("an empty line is legal and reorders to nothing")
+    match bidipara.resolve("abc", BidiBaseAuto)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            match bidireorder.reorder_line(p, 1, 1)
+                Err(_) => test.fail("an empty range is a legal line")
+                Ok(o)  => test.assert(list.len(o) == 0)
+
+    test.case("the same two checks guard the levels")
+    match bidipara.resolve("abc", BidiBaseAuto)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            match bidireorder.line_levels(p, 0, 99)
+                Ok(_)  => test.fail("99 is not inside a three-character paragraph")
+                Err(e) => test.assert(bidierror.code(e) == "line-out-of-range")
+
+@test
+fn test_reordered_text_is_a_string_and_does_not_mirror() [io]
+    // L4 is a display decision taken one character at a time.  A
+    // reordered string in which `(` had silently become `)` is wrong
+    // to search and wrong to copy back out, so nothing here does it.
+    test.case("a left-to-right line comes back as it went in")
+    match bidipara.resolve("(a)", BidiBaseLtr)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            match bidireorder.reordered_text(p, 0, 3)
+                Err(_) => test.fail("0 to 3 is a line of a three-character paragraph")
+                Ok(s)  => test.assert(s == "(a)")
+
+    test.case("and L4 changes nothing at an even level")
+    match bidipara.resolve("(a)", BidiBaseLtr)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  => test.assert_none(bidimirror.mirror_at(p, 0))
+
+    test.case("a right-to-left line is reversed and still holds the same characters")
+    match bidipara.resolve("אבג", BidiBaseAuto)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            match bidireorder.reordered_text(p, 0, 3)
+                Err(_) => test.fail("0 to 3 is a line of a three-character paragraph")
+                Ok(s)  => test.assert(str.len(s) == 6)

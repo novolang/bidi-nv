@@ -1,0 +1,281 @@
+// bidiclass_tests.nv — the property table, the default nobody
+// implements, and `BidiTest.txt`'s own format.
+//
+// RED ON PURPOSE.
+//
+// THE ORACLE IS `BidiTest.txt`, the other conformance file the UCD
+// ships for UAX #9.  It states its cases as Bidi_CLASSES rather than
+// as characters, which is why it belongs in this suite: a harness
+// driving it never touches the code-point table at all, it turns
+// `"R AL ON"` into classes through `bidiclass.class_named` and
+// resolves those.  Some half a million cases are in the file; the
+// block below is copied from it unaltered, and the reader is written
+// out because the implementation lane needs exactly this reader.
+//
+// Its format is a small stateful one:
+//
+//   `@Levels:` and `@Reorder:` set the expected result, and hold
+//   until the next directive of the same name.  `@Levels` gives one
+//   resolved level per input class, with `x` where X9 removed the
+//   character.  `@Reorder` gives the surviving characters in visual
+//   order, as indices into the input.
+//
+//   A data line is a space-separated class list, a semicolon, and a
+//   bitset of the paragraph directions the expectation holds for:
+//   1 = auto, 2 = LTR, 4 = RTL.  So `;7` means all three.
+
+use std.test
+use bidiclass
+
+// One case of `BidiTest.txt`, with the directives above it folded in.
+struct BidiClassVector
+    // The input, as Bidi_Class abbreviations.
+    classes: [Str]
+    // Which paragraph directions this expectation holds for:
+    // 1 = auto, 2 = LTR, 4 = RTL, added together.
+    bitset: Int
+    // The expected level per input class, `"x"` where X9 removed it.
+    levels: [Str]
+    // The expected visual order of the surviving characters.
+    order: [Int]
+
+// A block of `BidiTest.txt`, copied unaltered, directives included.
+fn class_test_block() -> [Str]
+    ["@Levels:\t0",
+     "@Reorder:\t0",
+     "L;3",
+     "@Levels:\t1",
+     "@Reorder:\t0",
+     "R;7",
+     "AL;7",
+     "@Levels:\tx",
+     "@Reorder:\t",
+     "LRE;7",
+     "RLE;7",
+     "PDF;7",
+     "BN;7",
+     "@Levels:\t1 2",
+     "@Reorder:\t1 0",
+     "R EN;7",
+     "@Levels:\t0 0 0",
+     "@Reorder:\t0 1 2",
+     "L ON L;3",
+     "@Levels:\t2 1",
+     "@Reorder:\t1 0",
+     "L R;4"]
+
+// A whitespace-separated field, with the empty pieces dropped.
+fn class_words(s: Str) -> [Str]
+    let pieces = str.split(str.replace(str.trim(s), "\t", " "), " ")
+    list.filter(pieces, piece => str.is_empty(piece) == false)
+
+// One decimal field, or -1 when it is not a number.
+//
+// A named function rather than a lambda: a `??` inside a lambda passed
+// to `list.map` segfaults under LLVM — filed as
+// codegen-llvm/optional-unwrap-inside-a-lambda-segfaults.
+fn decimal_value(d: Str) -> Int
+    str.to_int(d) ?? 0 - 1
+
+// The value after a directive's colon.
+fn directive_value(line: Str) -> Str
+    let colon = str.index(line, ":") ?? 0 - 1
+    if colon < 0
+        ""
+    else
+        str.slice(line, colon + 1, str.len(line))
+
+// The whole block, into one case per data line.
+fn parse_class_test_block(lines: [Str]) -> [BidiClassVector]
+    var levels = []
+    var order = []
+    var out = []
+    for line in lines
+        if str.starts_with(line, "@Levels:")
+            levels = class_words(directive_value(line))
+        else
+            if str.starts_with(line, "@Reorder:")
+                let ds = class_words(directive_value(line))
+                order = list.map(ds, decimal_value)
+            else
+                let f = str.split(line, ";")
+                out = list.push(out, BidiClassVector {
+                    classes: class_words(f[0]),
+                    bitset: decimal_value(str.trim(f[1])),
+                    levels: levels,
+                    order: order })
+    out
+
+// The twenty-three Bidi_Class abbreviations, in the order the enum
+// declares them.
+fn every_class_name() -> [Str]
+    ["L", "R", "AL", "EN", "ES", "ET", "AN", "CS", "NSM", "BN", "B",
+     "S", "WS", "ON", "LRE", "LRO", "RLE", "RLO", "PDF", "LRI", "RLI",
+     "FSI", "PDI"]
+
+@test
+fn test_the_bidi_test_block_parses_in_the_upstream_format() [io]
+    test.case("the directives carry forward over the data lines under them")
+    let cases = parse_class_test_block(class_test_block())
+    test.assert(list.len(cases) == 10)
+    test.assert(list.len(cases[1].classes) == 1)
+    test.assert(cases[1].classes[0] == "R")
+    test.assert(cases[1].levels[0] == "1")
+    test.assert(cases[1].bitset == 7)
+
+    test.case("`AL` inherits the same expectation as the `R` above it")
+    test.assert(cases[2].classes[0] == "AL")
+    test.assert(cases[2].levels[0] == "1")
+
+    test.case("the four X9-removed classes share one `x` expectation and no order")
+    test.assert(cases[3].classes[0] == "LRE")
+    test.assert(cases[3].levels[0] == "x")
+    test.assert(list.len(cases[3].order) == 0)
+    test.assert(cases[6].classes[0] == "BN")
+    test.assert(cases[6].levels[0] == "x")
+
+    test.case("a multi-character case keeps every level and its own order")
+    test.assert(list.len(cases[7].classes) == 2)
+    test.assert(list.len(cases[7].levels) == 2)
+    test.assert(cases[7].order[0] == 1)
+    test.assert(list.len(cases[8].classes) == 3)
+    test.assert(cases[9].bitset == 4)
+    test.assert(cases[9].order[0] == 1)
+
+    test.case("and every abbreviation in the block is one this package knows")
+    // The first assertion that reaches the package.
+    for c in cases
+        for name in c.classes
+            match bidiclass.class_named(name)
+                None    => test.fail("every class in the file is a Bidi_Class")
+                Some(k) => test.assert(bidiclass.class_name(k) == name)
+
+@test
+fn test_all_twenty_three_names_round_trip() [io]
+    // `BidiTest.txt` is written in these names, so a reader that
+    // lost one would silently skip the cases that use it.
+    test.case("every abbreviation the UCD uses is known and prints back")
+    for name in every_class_name()
+        match bidiclass.class_named(name)
+            None    => test.fail("that is one of the twenty-three")
+            Some(c) => test.assert(bidiclass.class_name(c) == name)
+
+    test.case("a misspelt abbreviation is None rather than a default")
+    test.assert_none(bidiclass.class_named("LTR"))
+    test.assert_none(bidiclass.class_named("l"))
+
+@test
+fn test_the_general_category_could_not_have_answered_these() [io]
+    // Four pairs that share a General_Category and differ in
+    // Bidi_Class.  They are the reason this package carries its own
+    // table rather than depending on unicode-nv.
+    test.case("two `Lo` letters, one R and one AL")
+    test.assert(bidiclass.class_name(bidiclass.class_of(0x05D0)) == "R")
+    test.assert(bidiclass.class_name(bidiclass.class_of(0x0627)) == "AL")
+
+    test.case("two `Nd` digits, one EN and one AN")
+    test.assert(bidiclass.class_name(bidiclass.class_of(0x0031)) == "EN")
+    test.assert(bidiclass.class_name(bidiclass.class_of(0x0660)) == "AN")
+
+    test.case("two `Cf` format characters, one RLE and one BN")
+    test.assert(bidiclass.class_name(bidiclass.class_of(0x202B)) == "RLE")
+    test.assert(bidiclass.class_name(bidiclass.class_of(0x200D)) == "BN")
+
+    test.case("and the four isolates are four distinct classes")
+    test.assert(bidiclass.class_name(bidiclass.class_of(0x2066)) == "LRI")
+    test.assert(bidiclass.class_name(bidiclass.class_of(0x2067)) == "RLI")
+    test.assert(bidiclass.class_name(bidiclass.class_of(0x2068)) == "FSI")
+    test.assert(bidiclass.class_name(bidiclass.class_of(0x2069)) == "PDI")
+
+@test
+fn test_an_unassigned_code_point_does_not_default_to_l() [io]
+    // The rule a table built only from the assigned characters gets
+    // wrong, and gets wrong for exactly the scripts this package
+    // exists for.
+    test.case("an unassigned code point in the Hebrew block defaults to R")
+    test.assert(bidiclass.is_assigned(0x05EB) == false)
+    test.assert(bidiclass.class_name(bidiclass.default_class(0x05EB)) == "R")
+    test.assert(bidiclass.class_name(bidiclass.class_of(0x05EB)) == "R")
+
+    test.case("an unassigned code point in the Arabic mathematical block is AL")
+    test.assert(bidiclass.is_assigned(0x1EE04) == false)
+    test.assert(bidiclass.class_name(bidiclass.default_class(0x1EE04)) == "AL")
+
+    test.case("outside those ranges the default really is L")
+    test.assert(bidiclass.class_name(bidiclass.default_class(0x0061)) == "L")
+
+    test.case("and an assigned character is marked as one")
+    test.assert(bidiclass.is_assigned(0x05D0))
+    test.assert(bidiclass.is_assigned(0x0041))
+
+@test
+fn test_the_predicate_sets_are_the_ones_the_rules_name() [io]
+    test.case("strong is L, R and AL, and nothing else")
+    test.assert(bidiclass.is_strong(BidiClassL))
+    test.assert(bidiclass.is_strong(BidiClassR))
+    test.assert(bidiclass.is_strong(BidiClassAL))
+    test.assert(bidiclass.is_strong(BidiClassEN) == false)
+
+    test.case("a number is EN or AN, because N1 makes both act as R")
+    test.assert(bidiclass.is_number(BidiClassEN))
+    test.assert(bidiclass.is_number(BidiClassAN))
+    test.assert(bidiclass.is_number(BidiClassET) == false)
+
+    test.case("NI holds the isolate initiators as well as the neutrals")
+    test.assert(bidiclass.is_neutral_or_isolate(BidiClassWS))
+    test.assert(bidiclass.is_neutral_or_isolate(BidiClassON))
+    test.assert(bidiclass.is_neutral_or_isolate(BidiClassLRI))
+    test.assert(bidiclass.is_neutral_or_isolate(BidiClassPDI))
+    test.assert(bidiclass.is_neutral_or_isolate(BidiClassLRE) == false)
+
+    test.case("an isolate initiator is one of three, and PDI is not one of them")
+    test.assert(bidiclass.is_isolate_initiator(BidiClassLRI))
+    test.assert(bidiclass.is_isolate_initiator(BidiClassRLI))
+    test.assert(bidiclass.is_isolate_initiator(BidiClassFSI))
+    test.assert(bidiclass.is_isolate_initiator(BidiClassPDI) == false)
+
+@test
+fn test_an_isolate_is_not_an_embedding() [io]
+    // The Unicode 6.3 split, asserted on its own because an
+    // implementation that treated the two alike passes every vector
+    // written before 6.3 and fails on any text a modern templating
+    // system produces.
+    test.case("all nine formatting characters are explicit formatting")
+    test.assert(bidiclass.is_explicit_formatting(BidiClassLRE))
+    test.assert(bidiclass.is_explicit_formatting(BidiClassRLO))
+    test.assert(bidiclass.is_explicit_formatting(BidiClassPDF))
+    test.assert(bidiclass.is_explicit_formatting(BidiClassFSI))
+    test.assert(bidiclass.is_explicit_formatting(BidiClassPDI))
+    test.assert(bidiclass.is_explicit_formatting(BidiClassBN) == false)
+
+    test.case("X9 removes the five embeddings and BN, and no isolate")
+    test.assert(bidiclass.is_removed_by_x9(BidiClassLRE))
+    test.assert(bidiclass.is_removed_by_x9(BidiClassRLE))
+    test.assert(bidiclass.is_removed_by_x9(BidiClassLRO))
+    test.assert(bidiclass.is_removed_by_x9(BidiClassRLO))
+    test.assert(bidiclass.is_removed_by_x9(BidiClassPDF))
+    test.assert(bidiclass.is_removed_by_x9(BidiClassBN))
+
+    test.case("an isolate keeps its level and its place")
+    test.assert(bidiclass.is_removed_by_x9(BidiClassLRI) == false)
+    test.assert(bidiclass.is_removed_by_x9(BidiClassRLI) == false)
+    test.assert(bidiclass.is_removed_by_x9(BidiClassFSI) == false)
+    test.assert(bidiclass.is_removed_by_x9(BidiClassPDI) == false)
+
+@test
+fn test_the_classes_of_a_string_line_up_with_its_characters() [io]
+    test.case("one entry per character, not per byte")
+    let cs = bidiclass.classes("a b")
+    test.assert(list.len(cs) == 3)
+    test.assert(bidiclass.class_name(cs[1]) == "WS")
+
+    test.case("a two-byte character is one entry")
+    test.assert(list.len(bidiclass.classes("שb")) == 2)
+
+    test.case("an empty string has no classes")
+    test.assert(list.len(bidiclass.classes("")) == 0)
+
+    test.case("and the table states its own size and version")
+    test.assert(str.len(bidiclass.UNICODE_VERSION) > 0)
+    test.assert(bidiclass.CLASS_RANGE_COUNT > 0)
+    test.assert(bidiclass.CLASS_TABLE_BYTES > bidiclass.CLASS_RANGE_COUNT)

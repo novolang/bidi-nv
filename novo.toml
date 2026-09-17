@@ -1,0 +1,68 @@
+[package]
+name        = "bidi-nv"
+version     = "0.0.1"
+description = "The Unicode Bidirectional Algorithm of UAX #9 as a resolution that answers LEVELS: one paragraph at a time, with the three-valued paragraph direction of P2/P3, the explicit embeddings and isolates of X1-X8 to the depth limit of 125, the weak, bracket-pair and neutral resolutions of W1-W7 and N0-N2 over the isolating run sequences of BD13, and reordering and mirroring published separately as the per-LINE questions L1-L4 actually are."
+license     = "Apache-2.0"
+
+# An INTERFACE release: every `pub fn` body is a `todo()`, so the
+# signatures and the effect rows are published and nothing is
+# implemented.  `novo pkg publish` recognises the shape and requires
+# both the draft stability and the 0.0.x version; the first
+# implementation is the 0.1.0 published over it.
+stability   = "draft"
+
+# `core`.  Every row is `[]`.  The algorithm is a pure function of the
+# text and the caller's requested paragraph direction: the character
+# property tables are compiled in, nothing here reads a locale, a
+# clock, an environment variable or a file, and no function allocates
+# a buffer the caller did not ask for.  So a terminal on a device can
+# resolve a line of Arabic with no filesystem under it, and every
+# conformance vector can be driven with no input at all.
+layer       = "core"
+
+category    = "text"
+
+tags        = ["bidi", "bidirectional", "uax-9", "unicode", "rtl", "arabic", "hebrew", "reordering", "text"]
+repository  = "https://github.com/novolang/bidi-nv"
+maintainers = ["novo-lang"]
+novo        = ">= 0.9.0"
+
+# A library: no `main`, so `novo pkg build` type-checks and
+# effect-checks every module under `src/` and writes no binary.
+
+[docs.pages]
+"README.md" = "The Unicode Bidirectional Algorithm, resolved to levels"
+
+[dependencies]
+# None, and the one that has to be argued is unicode-nv.
+#
+# REFUSED, and not as a matter of taste: unicode-nv 0.0.1 does not
+# publish any property this algorithm reads.  Its surface is
+# `uclass.UniCategory` — Unicode's GENERAL category, all thirty arms —
+# beside display width, grapheme and word breaks, normalisation and
+# case mapping.  There is no Bidi_Class, no Bidi_Mirrored, no
+# Bidi_Mirroring_Glyph and no Bidi_Paired_Bracket anywhere in it, and
+# its own README lists "Bidirectional text, UAX #9" under what it does
+# not include.
+#
+# And General_Category does not determine Bidi_Class, so the table
+# could not be derived from the one unicode-nv does publish.  Hebrew
+# alef and Arabic alef are both `Lo`; one is R and the other is AL,
+# and the difference decides W2 and W3.  A European digit and an
+# Arabic-Indic digit are both `Nd`; one is EN and the other AN, and
+# the difference decides I1.  All nine explicit formatting characters
+# and the zero-width joiner are `Cf`; the nine have nine distinct
+# Bidi_Classes and the joiner is BN.
+#
+# So bidi-nv carries its own tables: Bidi_Class as a range table,
+# Bidi_Mirroring_Glyph as pairs, and Bidi_Paired_Bracket with its
+# type.  They come to about 9 KB together, which is why they are
+# compiled in with no handle to pass and no tier to choose —
+# `bidiclass.CLASS_TABLE_BYTES` and `bidimirror.MIRROR_TABLE_BYTES`
+# are published so a caller sizing a firmware image reads the number
+# rather than guessing it.
+#
+# What a caller that ALSO needs unicode-nv does: take both.  The two
+# packages share no type, and the two questions are asked at different
+# moments — normalisation before this algorithm runs, grapheme
+# clusters after the reordering, when a caret is being moved.

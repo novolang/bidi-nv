@@ -1,0 +1,266 @@
+// bidipara_tests.nv — P1, P2 and P3: what decides a paragraph's
+// direction, and what a caller is refused for skipping a step.
+//
+// RED ON PURPOSE: every assertion that reaches the package reaches
+// `not implemented: bidi-nv.<module>.<fn>`.
+//
+// THE ORACLE IS `BidiCharacterTest.txt`, one of the two conformance
+// files the Unicode Character Database ships for UAX #9.  The whole
+// file is some ninety thousand lines and is not vendored here; the
+// lines below are copied from it unaltered, and the reader that
+// parses them is written out because the implementation lane needs
+// exactly this reader to drive the rest of the file.
+//
+// Its format is five fields separated by semicolons:
+//
+//   1. the text, as space-separated hexadecimal code points
+//   2. the paragraph direction: 0 = LTR, 1 = RTL, 2 = auto (P2/P3)
+//   3. the paragraph embedding level P2 and P3 resolved to
+//   4. one resolved level per character, or `x` where X9 removed it
+//   5. the visible characters, in visual order, as indices into
+//      field 1 — the characters X9 removed are absent
+//
+// A NOTE THE IMPLEMENTATION LANE WILL NEED: field 1 cannot be turned
+// back into a `Str` with anything the standard library has.
+// `str.from_char` narrows its argument to one byte and answers
+// mojibake for every code point above U+007F, silently — filed as
+// stdlib/str-from-char-truncates-a-non-ascii-code-point.  So the
+// vectors below are parsed to code points for the class-level
+// assertions, and the text a vector denotes is written out as a
+// literal wherever a `Str` is needed.
+
+use std.test
+use bidiclass
+use bidierror
+use bidilevel
+use bidipara
+
+// One line of `BidiCharacterTest.txt`, parsed.
+struct BidiCharVector
+    // Field 1: the code points of the text, in logical order.
+    codepoints: [Int]
+    // Field 2: 0 = LTR, 1 = RTL, 2 = auto.
+    base: Int
+    // Field 3: the resolved paragraph embedding level.
+    level: Int
+    // Field 4: one entry per character, `"x"` where X9 removed it.
+    levels: [Str]
+    // Field 5: the visible characters, in visual order.
+    order: [Int]
+
+// Six lines of `BidiCharacterTest.txt`, copied unaltered.
+fn character_vectors() -> [Str]
+    ["0061 0028 0062 0029 0064;0;0;0 0 0 0 0;0 1 2 3 4",
+     "05D0 05D1 05D2;2;1;1 1 1;2 1 0",
+     "0061 05D0 0062;0;0;0 1 0;0 1 2",
+     "05D0 0020 0031 0032;1;1;1 1 2 2;2 3 1 0",
+     "05D0 0028 05D1 0029 05D2;1;1;1 1 1 1 1;4 3 2 1 0",
+     "0061 202B 05D0 202C 0062;0;0;0 x 1 x 0;0 2 4"]
+
+// The value of one hexadecimal field, as the file writes them: four
+// to six upper-case digits.
+fn hex_value(s: Str) -> Int
+    var v = 0
+    for i in 0..str.len(s)
+        let b = str.byte_at_or(s, i, 48)
+        if b >= 48 and b <= 57
+            v = v * 16 + (b - 48)
+        else
+            v = v * 16 + (b - 55)
+    v
+
+// A space-separated field, with the empty pieces dropped, so that a
+// field that is empty answers no pieces rather than one empty one.
+fn char_words(s: Str) -> [Str]
+    list.filter(str.split(str.trim(s), " "), piece => str.is_empty(piece) == false)
+
+// One decimal field, or -1 when it is not a number.
+//
+// A named function rather than a lambda: a `??` inside a lambda passed
+// to `list.map` segfaults under LLVM — filed as
+// codegen-llvm/optional-unwrap-inside-a-lambda-segfaults.
+fn decimal_value(d: Str) -> Int
+    str.to_int(d) ?? 0 - 1
+
+// One line of the file.
+fn parse_character_vector(line: Str) -> BidiCharVector
+    let f = str.split(line, ";")
+    BidiCharVector {
+        codepoints: list.map(char_words(f[0]), hex_value),
+        base: decimal_value(str.trim(f[1])),
+        level: decimal_value(str.trim(f[2])),
+        levels: char_words(f[3]),
+        order: list.map(char_words(f[4]), decimal_value) }
+
+@test
+fn test_the_conformance_lines_parse_in_the_upstream_format() [io]
+    // The reader the implementation lane will run over the whole
+    // file.  It is asserted here on six lines so that a change to it
+    // fails beside the vectors rather than in a harness nobody reads.
+    test.case("every line has five fields and one level per character")
+    for line in character_vectors()
+        let v = parse_character_vector(line)
+        test.assert(list.len(v.codepoints) == list.len(v.levels))
+        test.assert(v.base >= 0)
+        test.assert(v.level >= 0)
+
+    test.case("the paragraph direction field is 0, 1 or 2")
+    for line in character_vectors()
+        let v = parse_character_vector(line)
+        test.assert(v.base <= 2)
+
+    test.case("`x` marks a character X9 removed, and it is absent from the order")
+    let removed = parse_character_vector(character_vectors()[5])
+    test.assert(removed.levels[1] == "x")
+    test.assert(removed.levels[3] == "x")
+    test.assert(list.len(removed.order) == 3)
+    test.assert(list.len(removed.codepoints) == 5)
+
+    test.case("and the classes of the code points are what the vector implies")
+    // This is the first assertion that reaches the package.
+    test.assert(bidiclass.class_name(bidiclass.class_of(removed.codepoints[1])) == "RLE")
+    test.assert(bidiclass.class_name(bidiclass.class_of(removed.codepoints[3])) == "PDF")
+    test.assert(bidiclass.is_removed_by_x9(bidiclass.class_of(removed.codepoints[1])))
+
+@test
+fn test_p2_and_p3_read_the_first_strong_character() [io]
+    // The rule in one sentence: the first L, R or AL decides, and
+    // nothing else in the paragraph gets a vote.
+    test.case("digits and punctuation are not strong, so the default holds")
+    test.assert(bidilevel.direction_name(bidipara.base_direction_of("123 (!) 456")) == "ltr")
+
+    test.case("a Hebrew letter is strong and makes the paragraph right-to-left")
+    test.assert(bidilevel.direction_name(bidipara.base_direction_of("123 שלום")) == "rtl")
+
+    test.case("an empty paragraph is P3's otherwise, which is left-to-right")
+    test.assert(bidilevel.direction_name(bidipara.base_direction_of("")) == "ltr")
+
+@test
+fn test_auto_is_a_third_value_and_not_a_synonym_for_ltr() [io]
+    // The bug every naive implementation ships is an `auto` that
+    // quietly means LTR.  Here the three arms give three answers over
+    // the same text, and the test says so in one place.
+    test.case("auto over right-to-left text resolves to level 1")
+    match bidipara.resolve("שלום", BidiBaseAuto)
+        Err(_) => test.fail("one paragraph of Hebrew resolves")
+        Ok(p)  => test.assert(bidipara.paragraph_level(p) == 1)
+
+    test.case("and the same text forced left-to-right resolves to level 0")
+    match bidipara.resolve("שלום", BidiBaseLtr)
+        Err(_) => test.fail("one paragraph of Hebrew resolves")
+        Ok(p)  => test.assert(bidipara.paragraph_level(p) == 0)
+
+    test.case("auto over left-to-right text is level 0, the same as ltr")
+    match bidipara.resolve("hello", BidiBaseAuto)
+        Err(_) => test.fail("one paragraph of Latin resolves")
+        Ok(p)  => test.assert(bidipara.paragraph_level(p) == 0)
+
+    test.case("and rtl forces level 1 over text with no strong character at all")
+    match bidipara.resolve("123", BidiBaseRtl)
+        Err(_) => test.fail("one paragraph of digits resolves")
+        Ok(p)  => test.assert(bidilevel.direction_name(bidipara.direction(p)) == "rtl")
+
+@test
+fn test_p1_comes_first_and_resolve_says_so() [io]
+    // A caller that hands a whole document to `resolve` gets, from
+    // every other implementation, the first paragraph's direction
+    // applied to all of them.  Here it is a refusal with the offset
+    // of the break in it.
+    test.case("a text with a break in the middle is refused by name")
+    match bidipara.resolve("one\ntwo", BidiBaseAuto)
+        Ok(_)  => test.fail("that text is two paragraphs, not one")
+        Err(e) =>
+            test.assert(bidierror.code(e) == "more-than-one-paragraph")
+            test.assert(str.len(bidierror.message(e)) > 0)
+
+    test.case("and it is a fault in the text rather than in the call")
+    match bidipara.resolve("one\ntwo", BidiBaseAuto)
+        Ok(_)  => test.fail("that text is two paragraphs, not one")
+        Err(e) => test.assert(bidierror.is_text_fault(e))
+
+    test.case("a separator at the very end belongs to the paragraph and is accepted")
+    match bidipara.resolve("one\n", BidiBaseAuto)
+        Err(_) => test.fail("a paragraph may end with its own separator")
+        Ok(p)  => test.assert(bidipara.char_count(p) == 4)
+
+    test.case("P1 is the call that was meant, and the pieces keep their separators")
+    let parts = bidipara.split_paragraphs("one\ntwo")
+    test.assert(list.len(parts) == 2)
+    test.assert(parts[0] == "one\n")
+    test.assert(parts[1] == "two")
+
+@test
+fn test_an_explicit_paragraph_level_is_range_checked() [io]
+    // `resolve_at_level` is P3's higher-level protocol escape, and it
+    // is the only entry point that can be handed a number.
+    test.case("the deepest legal level is accepted")
+    match bidipara.resolve_at_level("abc", 125)
+        Err(_) => test.fail("125 is MAX_DEPTH and is legal")
+        Ok(p)  => test.assert(bidipara.paragraph_level(p) == 125)
+
+    test.case("one deeper is refused, and the refusal is about the call")
+    match bidipara.resolve_at_level("abc", 126)
+        Ok(_)  => test.fail("126 is past MAX_DEPTH")
+        Err(e) =>
+            test.assert(bidierror.code(e) == "level-out-of-range")
+            test.assert(bidierror.is_text_fault(e) == false)
+
+@test
+fn test_the_resolved_paragraph_answers_every_later_question() [io]
+    // One value, and nothing after it needs the text again.
+    test.case("the text, the count and the levels all agree")
+    match bidipara.resolve("a b", BidiBaseAuto)
+        Err(_) => test.fail("one paragraph of Latin resolves")
+        Ok(p)  =>
+            test.assert(p.text == "a b")
+            test.assert(bidipara.char_count(p) == 3)
+            test.assert(list.len(p.levels) == 3)
+            test.assert(list.len(p.classes) == 3)
+
+    test.case("the ORIGINAL class is kept, because L1 is defined over it")
+    match bidipara.resolve("a b", BidiBaseAuto)
+        Err(_) => test.fail("one paragraph of Latin resolves")
+        Ok(p)  =>
+            match bidipara.class_at(p, 1)
+                None    => test.fail("character 1 exists")
+                Some(c) => test.assert(bidiclass.class_name(c) == "WS")
+
+    test.case("a level reads back, and an index past the end is None")
+    match bidipara.resolve("abc", BidiBaseAuto)
+        Err(_) => test.fail("one paragraph of Latin resolves")
+        Ok(p)  =>
+            match bidipara.level_at(p, 0)
+                None    => test.fail("character 0 exists")
+                Some(l) => test.assert(l == 0)
+            test.assert_none(bidipara.level_at(p, 99))
+            test.assert_none(bidipara.class_at(p, 99))
+
+    test.case("characters map to byte offsets, which is not the same unit")
+    match bidipara.resolve("שb", BidiBaseAuto)
+        Err(_) => test.fail("one paragraph resolves")
+        Ok(p)  =>
+            test.assert(bidipara.char_count(p) == 2)
+            match bidipara.byte_offset_at(p, 1)
+                None    => test.fail("character 1 exists")
+                Some(o) => test.assert(o == 2)
+
+    test.case("ordinary text overflows nothing")
+    match bidipara.resolve("abc", BidiBaseAuto)
+        Err(_) => test.fail("one paragraph of Latin resolves")
+        Ok(p)  =>
+            test.assert(bidipara.had_overflow(p) == false)
+            test.assert(p.overflow_count == 0)
+            test.assert(p.isolate_overflow_count == 0)
+
+@test
+fn test_the_base_direction_names_are_the_dir_attribute_values() [io]
+    test.case("the three names round-trip")
+    match bidipara.base_named("auto")
+        None    => test.fail("auto is one of the three")
+        Some(b) => test.assert(bidipara.base_name(b) == "auto")
+    match bidipara.base_named("rtl")
+        None    => test.fail("rtl is one of the three")
+        Some(b) => test.assert(bidipara.base_name(b) == "rtl")
+
+    test.case("a misspelt attribute is None rather than a silent default")
+    test.assert_none(bidipara.base_named("lrt"))

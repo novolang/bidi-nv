@@ -1,0 +1,399 @@
+// bidiclass.nv — the Bidi_Class property, the twenty-three values it
+// takes, and the table this package has to carry because nothing else
+// on the registry publishes it.
+//
+// WHY THE TABLE IS HERE AND NOT IN unicode-nv
+//
+// unicode-nv 0.0.1 publishes the GENERAL category, `uclass.UniCategory`,
+// beside display width, grapheme breaks, normalisation and case
+// mapping.  It publishes no Bidi_Class, no Bidi_Mirrored and no
+// Bidi_Paired_Bracket, and its own list of what it does not include
+// names UAX #9 outright.  So there is nothing to depend on.
+//
+// General_Category could not have been used even if it were free.
+// Hebrew alef and Arabic alef are both `Lo`; one is R and the other
+// AL, and the difference is what decides W2 and W3.  A European digit
+// and an Arabic-Indic digit are both `Nd`; one is EN and the other AN,
+// and the difference is what decides I1.  All nine explicit
+// formatting characters and the zero-width joiner are `Cf`; the nine
+// have nine distinct Bidi_Classes and the joiner is BN.  A package
+// that derived bidi classes from general categories would be wrong
+// about exactly the scripts it exists for.
+//
+// THE DEFAULT IS NOT L, AND THAT IS THE RULE WORTH PUBLISHING
+//
+// A table listing only the characters Unicode has assigned is wrong,
+// and wrong in the one direction that matters.  `DerivedBidiClass.txt`
+// gives Bidi_Class a DEFAULT for unassigned code points, and the
+// default is per-range: unassigned code points in the Hebrew, Thaana,
+// NKo, Samaritan and Mandaic ranges and their supplementary
+// counterparts default to **R**; unassigned code points in the Arabic,
+// Syriac and Arabic-Extended ranges, in the presentation-forms blocks
+// and in the Arabic mathematical alphabets default to **AL**;
+// unassigned code points in the Currency Symbols block default to
+// **ET**; noncharacters and unassigned default-ignorables default to
+// **BN**; and everything else defaults to L.
+//
+// The consequence, for an implementation that answered L for anything
+// it did not know: a Hebrew document containing one code point added
+// in a Unicode version newer than the table gets a left-to-right
+// island in the middle of a right-to-left paragraph, and the text
+// around it moves.  Every other class of bug in this algorithm shows
+// up on the vectors; this one only shows up on somebody's real
+// document, years later.  `default_class` is that rule as a function,
+// and `is_assigned` is how a caller tells an answer that came from
+// the table from one that came from a default.
+//
+// THE TABLE IS COMPILED IN, WITH NO HANDLE AND NO TIER
+//
+// unicode-nv tiers its tables because normalisation alone is 190 KB.
+// The three tables here come to about 9 KB together, which fits on
+// the devices this package is `core` for, so there is no `BidiData`
+// to construct and no argument to thread through forty signatures.
+// `CLASS_TABLE_BYTES` is published instead, so a caller sizing a
+// firmware image reads the number rather than guessing it, and so the
+// number changes visibly when the tables are regenerated.
+
+// The Bidi_Class property of a code point: all twenty-three values,
+// under the abbreviations `DerivedBidiClass.txt` uses.
+//
+// All twenty-three and not a useful subset.  A partial enum would
+// have to fold, say, LRE and RLE into one "embedding" arm, and X2 and
+// X3 differ in exactly the way those two differ; it would have to
+// fold B and S, and L1 treats them alike in one respect and not in
+// another.  Every arm here is read by a named rule.
+//
+// ```novo
+// use bidiclass
+//
+// fn main() [io]
+//     println(bidiclass.class_name(BidiClassAL))   // AL
+// ```
+pub enum BidiClass
+    // L — a strong left-to-right character.  Most of the world's
+    // scripts.  P2 looks for one of these, R or AL.
+    BidiClassL
+    // R — a strong right-to-left character that is not Arabic:
+    // Hebrew, and the right-to-left historic scripts.
+    BidiClassR
+    // AL — a strong right-to-left Arabic-like character.  Kept apart
+    // from R because W2 turns a following EN into AN only after an
+    // AL, and W3 then turns the AL itself into R.
+    BidiClassAL
+    // EN — a European number: the ASCII digits and their
+    // look-alikes.  I1 raises one at an even level by two, not one.
+    BidiClassEN
+    // ES — a European number separator: plus, minus, the solidus.
+    // W4 keeps one between two ENs.
+    BidiClassES
+    // ET — a European number terminator: the per-cent sign, the
+    // degree sign, most currency symbols.  W5 absorbs a run of these
+    // into an adjacent EN.
+    BidiClassET
+    // AN — an Arabic number: the Arabic-Indic digits and the Arabic
+    // number signs.  Not EN, and the split is invisible in
+    // General_Category, which calls both `Nd`.
+    BidiClassAN
+    // CS — a common number separator: comma, full stop, colon,
+    // no-break space.  W4 keeps one between two numbers of the same
+    // kind and only then.
+    BidiClassCS
+    // NSM — a non-spacing mark.  W1 gives it the class of the
+    // character it follows, which is why the rule has to run before
+    // anything reads a class.
+    BidiClassNSM
+    // BN — a boundary-neutral character: the controls, the joiners,
+    // the format characters with no bidi meaning.  X9 removes these
+    // along with the embedding controls.
+    BidiClassBN
+    // B — a paragraph separator.  P1 splits on it, and it belongs to
+    // the paragraph it ends.  L1 resets it, and any whitespace before
+    // it, to the paragraph level.
+    BidiClassB
+    // S — a segment separator: the tab.  L1 resets it, and any
+    // whitespace before it, to the paragraph level, which is what
+    // keeps the columns of a tabbed table in place.
+    BidiClassS
+    // WS — whitespace.  L1 resets a run of it at the end of a line to
+    // the paragraph level, which is why trailing spaces do not drag
+    // the caret to the wrong margin.
+    BidiClassWS
+    // ON — any other neutral.  Most punctuation and most symbols.
+    // N1 and N2 decide these.
+    BidiClassON
+    // LRE — U+202A, left-to-right embedding.  X2.  Removed by X9.
+    BidiClassLRE
+    // LRO — U+202D, left-to-right override.  X4.  Removed by X9.
+    BidiClassLRO
+    // RLE — U+202B, right-to-left embedding.  X3.  Removed by X9.
+    BidiClassRLE
+    // RLO — U+202E, right-to-left override.  X5.  Removed by X9.
+    BidiClassRLO
+    // PDF — U+202C, pop directional formatting.  X7.  Removed by X9.
+    BidiClassPDF
+    // LRI — U+2066, left-to-right isolate.  X5a.  NOT removed by X9:
+    // it keeps a level and acts as a neutral to its neighbours.
+    BidiClassLRI
+    // RLI — U+2067, right-to-left isolate.  X5b.  Not removed by X9.
+    BidiClassRLI
+    // FSI — U+2068, first strong isolate.  X5c: the direction of the
+    // isolate is worked out from its own contents by P2 and P3, which
+    // makes it the only formatting character whose effect depends on
+    // the text after it.  Not removed by X9.
+    BidiClassFSI
+    // PDI — U+2069, pop directional isolate.  X6a.  Not removed by
+    // X9, and BD9 matches it to its initiator by a scan that is not
+    // the same scan PDF gets.
+    BidiClassPDI
+
+// The Unicode version the three tables in this package are generated
+// from.
+//
+// Public because two systems that disagree about a bidi result
+// usually disagree about what Unicode is, and because a bug report
+// that does not name the version is a bug report about nothing.
+pub const UNICODE_VERSION = "16.0.0"
+
+// How many ranges the Bidi_Class table holds, defaults included.
+//
+// Measured off `DerivedBidiClass.txt`.  Regenerated with the table,
+// so a caller that cares reads the constant rather than copying the
+// number into its own source.
+pub const CLASS_RANGE_COUNT = 760
+
+// How many bytes of Bidi_Class table are compiled into a program that
+// calls anything in this package.
+//
+// A start, an end and a class per range.  The companion numbers are
+// `bidimirror.MIRROR_TABLE_BYTES` and
+// `bidimirror.BRACKET_TABLE_BYTES`; the three together are the whole
+// data cost of the package.
+pub const CLASS_TABLE_BYTES = 6080
+
+// The Bidi_Class of a code point.
+//
+// A code point Unicode has not assigned answers its DEFAULT, which is
+// not always L — see `default_class`.  A value above U+10FFFF, and a
+// surrogate, answer `BidiClassL`, because neither can occur in text
+// and a caller that reached one has a different problem.
+//
+// ```novo
+// use bidiclass
+//
+// fn main() [io]
+//     println(bidiclass.class_name(bidiclass.class_of(0x0041)))   // L
+//     println(bidiclass.class_name(bidiclass.class_of(0x05D0)))   // R
+//     println(bidiclass.class_name(bidiclass.class_of(0x0627)))   // AL
+//     println(bidiclass.class_name(bidiclass.class_of(0x0660)))   // AN
+// ```
+pub fn class_of(ch: Int) -> BidiClass []
+    todo("bidi-nv.bidiclass.class_of")
+
+// The Bidi_Class of every character of a string, in order.
+//
+// One entry per Unicode scalar value, not per byte, so the list
+// indexes the same way `bidipara.BidiParagraph.levels` does.  This is
+// the input the whole algorithm runs on, published on its own because
+// a caller writing a conformance harness has the classes and not the
+// characters.
+//
+// ```novo
+// use bidiclass
+//
+// fn main() [io]
+//     let cs = bidiclass.classes("a b")
+//     println("${list.len(cs)}")                    // 3
+//     println(bidiclass.class_name(cs[1]))          // WS
+// ```
+pub fn classes(text: Str) -> [BidiClass] []
+    todo("bidi-nv.bidiclass.classes")
+
+// What an UNASSIGNED code point at this position defaults to.
+//
+// The rule from `DerivedBidiClass.txt`, published as a function
+// because it is the part of the property an implementation most often
+// gets wrong: the default is L only outside the right-to-left blocks.
+// Inside the Hebrew, Thaana, NKo, Samaritan and Mandaic ranges and
+// their supplementary counterparts it is `BidiClassR`; inside the
+// Arabic, Syriac and Arabic-Extended ranges, the presentation forms
+// and the Arabic mathematical alphabets it is `BidiClassAL`; in the
+// Currency Symbols block it is `BidiClassET`; for a noncharacter or
+// an unassigned default-ignorable it is `BidiClassBN`.
+//
+// It answers for an assigned code point too, and then it answers what
+// that code point WOULD have defaulted to, which is usually but not
+// always its actual class.  `class_of` is the property; this is the
+// fallback.
+//
+// ```novo
+// use bidiclass
+//
+// fn main() [io]
+//     // An unassigned code point in the Hebrew block.
+//     println(bidiclass.class_name(bidiclass.default_class(0x05EB)))   // R
+//     // An unassigned code point in the Arabic block.
+//     println(bidiclass.class_name(bidiclass.default_class(0x08B5)))   // AL
+// ```
+pub fn default_class(ch: Int) -> BidiClass []
+    todo("bidi-nv.bidiclass.default_class")
+
+// Whether the table holds an explicit Bidi_Class for this code point,
+// as opposed to answering it from a default range.
+//
+// Published so that a caller can tell "Unicode says R" from "this
+// table has never heard of it and the block says R".  A text editor
+// showing character properties wants the difference; so does a bug
+// report about a code point added after `UNICODE_VERSION`.
+//
+// ```novo
+// use bidiclass
+//
+// fn main() [io]
+//     println("${bidiclass.is_assigned(0x05D0)}")   // true
+//     println("${bidiclass.is_assigned(0x05EB)}")   // false
+// ```
+pub fn is_assigned(ch: Int) -> Bool []
+    todo("bidi-nv.bidiclass.is_assigned")
+
+// The class as its UCD abbreviation: `"L"`, `"AL"`, `"NSM"`, `"LRI"`
+// and the rest.
+//
+// The names `DerivedBidiClass.txt` and `BidiTest.txt` both use, so a
+// conformance file's own words print back unchanged and a test may
+// compare strings.
+//
+// ```novo
+// use bidiclass
+//
+// fn main() [io]
+//     println(bidiclass.class_name(BidiClassNSM))   // NSM
+// ```
+pub fn class_name(c: BidiClass) -> Str []
+    todo("bidi-nv.bidiclass.class_name")
+
+// The class an abbreviation denotes, or `None`.
+//
+// The reader every conformance harness needs: `BidiTest.txt` states
+// its cases as a list of these abbreviations rather than as
+// characters, so a harness turns `"R AL ON"` into classes through
+// this function and never touches the table at all.  An unknown
+// abbreviation is `None` rather than a default, because a misspelt
+// class name in a vector file is a vector that would otherwise pass.
+//
+// ```novo
+// use bidiclass
+//
+// fn main() [io]
+//     match bidiclass.class_named("FSI")
+//         Some(c) => println(bidiclass.class_name(c))   // FSI
+//         None    => println("not a Bidi_Class abbreviation")
+// ```
+pub fn class_named(name: Str) -> ?BidiClass []
+    todo("bidi-nv.bidiclass.class_named")
+
+// Whether the class is strong: L, R or AL.
+//
+// The three P2 scans for, and the three W2 and W7 remember as the
+// last strong type seen.
+//
+// ```novo
+// use bidiclass
+//
+// fn main() [io]
+//     println("${bidiclass.is_strong(BidiClassAL)}")   // true
+//     println("${bidiclass.is_strong(BidiClassEN)}")   // false
+// ```
+pub fn is_strong(c: BidiClass) -> Bool []
+    todo("bidi-nv.bidiclass.is_strong")
+
+// Whether the class is a number: EN or AN.
+//
+// Published because N1 needs it and the rule is easy to misread: for
+// the purpose of deciding a run of neutrals, a number "acts as if it
+// were R", whichever kind it is.  So a neutral between a Hebrew
+// letter and a European digit becomes R, and a library that only
+// looked at strong types would have made it follow the paragraph
+// instead.
+//
+// ```novo
+// use bidiclass
+//
+// fn main() [io]
+//     println("${bidiclass.is_number(BidiClassAN)}")   // true
+//     println("${bidiclass.is_number(BidiClassET)}")   // false
+// ```
+pub fn is_number(c: BidiClass) -> Bool []
+    todo("bidi-nv.bidiclass.is_number")
+
+// Whether the class is a neutral or an isolate formatting character:
+// B, S, WS, ON, FSI, LRI, RLI or PDI.
+//
+// UAX #9 abbreviates this set NI and writes N0, N1 and N2 entirely in
+// terms of it.  The isolate initiators are in it, which is the part
+// that surprises: an LRI is a strong instruction to the X rules and a
+// plain neutral to the N rules, and both are true at once.
+//
+// ```novo
+// use bidiclass
+//
+// fn main() [io]
+//     println("${bidiclass.is_neutral_or_isolate(BidiClassLRI)}")   // true
+//     println("${bidiclass.is_neutral_or_isolate(BidiClassLRE)}")   // false
+// ```
+pub fn is_neutral_or_isolate(c: BidiClass) -> Bool []
+    todo("bidi-nv.bidiclass.is_neutral_or_isolate")
+
+// Whether the class is an isolate initiator: LRI, RLI or FSI.
+//
+// BD8.  These are the three P2 skips over — the scan for the first
+// strong character jumps from an initiator to its matching PDI — and
+// they are what BD13 builds an isolating run sequence out of.
+//
+// ```novo
+// use bidiclass
+//
+// fn main() [io]
+//     println("${bidiclass.is_isolate_initiator(BidiClassFSI)}")   // true
+//     println("${bidiclass.is_isolate_initiator(BidiClassPDI)}")   // false
+// ```
+pub fn is_isolate_initiator(c: BidiClass) -> Bool []
+    todo("bidi-nv.bidiclass.is_isolate_initiator")
+
+// Whether the class is one of the nine explicit formatting
+// characters: LRE, RLE, LRO, RLO, PDF, LRI, RLI, FSI or PDI.
+//
+// The nine UAX #9 tabulates under "Explicit Formatting Characters".
+// It is deliberately not the same set as `is_removed_by_x9`, and the
+// difference between the two is the Unicode 6.3 isolates: an
+// embedding disappears before the W rules run, an isolate does not.
+//
+// ```novo
+// use bidiclass
+//
+// fn main() [io]
+//     println("${bidiclass.is_explicit_formatting(BidiClassPDI)}")   // true
+//     println("${bidiclass.is_explicit_formatting(BidiClassBN)}")    // false
+// ```
+pub fn is_explicit_formatting(c: BidiClass) -> Bool []
+    todo("bidi-nv.bidiclass.is_explicit_formatting")
+
+// Whether X9 removes a character of this class from the text the W,
+// N and I rules see: LRE, RLE, LRO, RLO, PDF or BN.
+//
+// Six classes, and the isolates are not among them.  A removed
+// character still has a position in the original text and still gets
+// a level reported for it — `bidipara` keeps the text as it was
+// handed in — but no rule after X9 reads its class, and
+// `bidireorder` leaves it out of a visual order.  That is the same
+// treatment `BidiCharacterTest.txt` gives it when it writes `x` in
+// the levels column.
+//
+// ```novo
+// use bidiclass
+//
+// fn main() [io]
+//     println("${bidiclass.is_removed_by_x9(BidiClassPDF)}")   // true
+//     println("${bidiclass.is_removed_by_x9(BidiClassPDI)}")   // false
+// ```
+pub fn is_removed_by_x9(c: BidiClass) -> Bool []
+    todo("bidi-nv.bidiclass.is_removed_by_x9")

@@ -1,0 +1,222 @@
+// bidimirror.nv — L4 and BD16: which characters change shape in
+// right-to-left text, and which brackets pair with which.
+//
+// THIS PACKAGE ANSWERS WHICH CHARACTER, NOT WHICH GLYPH
+//
+// L4 says: a character whose Bidi_Mirrored property is true and whose
+// resolved level is odd is "depicted by a mirrored glyph".  The
+// depicting is the renderer's.  What can be answered here is the
+// CHARACTER — `mirror_of` gives the Bidi_Mirroring_Glyph code point,
+// `mirror_at` applies L4's level condition to a resolved paragraph —
+// and what a caller does with it depends on the stack underneath.
+//
+// A caller with a real font does not substitute anything: OpenType's
+// `rtlm` feature mirrors the glyph, and swapping the character first
+// would either double the swap or hand the shaper a character the
+// font has no glyph for.  A caller drawing into a terminal, or into a
+// bitmap from a font with no mirroring table, substitutes the code
+// point.  Both are correct; the difference is not something a text
+// library can know, so it is not something this one decides.
+//
+// THE TEXT IS NEVER REWRITTEN
+//
+// Nothing here answers a mirrored string, and `bidireorder`'s
+// `reordered_text` does not apply L4 either.  A copy of the text in
+// which `(` has become `)` is wrong to search, wrong to copy back
+// into a document and wrong to hand to a shaper, and it is exactly
+// what a library that mirrored eagerly would produce.  The mirroring
+// is a display decision taken one character at a time, at the moment
+// of drawing.
+//
+// BIDI_MIRRORED IS NOT BIDI_PAIRED_BRACKET
+//
+// Two properties, two tables, two rules, and they overlap without
+// coinciding.  Bidi_Mirrored is true for about 360 characters — every
+// bracket, but also the mathematical relations, the angle quotation
+// marks and a good deal of the arrow block — and it drives L4, a
+// display rule that runs last.  Bidi_Paired_Bracket is defined for 60
+// PAIRS and it drives N0, a resolution rule that runs long before the
+// levels are final.  A parenthesis is in both; a less-than sign is
+// mirrored and is not a bracket; and N0 exists so that `(` and `)`
+// around a Hebrew phrase resolve to the same direction as the phrase
+// instead of to the paragraph's.
+
+use bidipara
+
+// Whether a character opens a bracket pair, closes one, or is not a
+// bracket: the Bidi_Paired_Bracket_Type property.
+//
+// ```novo
+// use bidimirror
+//
+// fn main() [io]
+//     println("${bidimirror.bracket_type(0x0028) == BidiBracketOpen}")   // true
+// ```
+pub enum BidiBracket
+    // `o` in `BidiBrackets.txt`: the character opens a pair.  BD16
+    // pushes it on the stack.
+    BidiBracketOpen
+    // `c` in `BidiBrackets.txt`: the character closes a pair.  BD16
+    // looks for it on the stack.
+    BidiBracketClose
+    // `n`: not a paired bracket.  The answer for every character
+    // outside the 120 that are, the mirrored non-brackets included.
+    BidiBracketNone
+
+// How many Bidi_Mirroring_Glyph pairs the table holds.
+//
+// Measured off `BidiMirroring.txt` at `bidiclass.UNICODE_VERSION`,
+// and regenerated with the table.
+pub const MIRROR_PAIR_COUNT = 364
+
+// How many bytes of mirroring table are compiled into a program that
+// calls anything in this module.
+//
+// A source and a target code point per pair.  The companions are
+// `BRACKET_TABLE_BYTES` and `bidiclass.CLASS_TABLE_BYTES`.
+pub const MIRROR_TABLE_BYTES = 2184
+
+// How many Bidi_Paired_Bracket pairs the table holds: 60, which is
+// 120 entries.
+//
+// Measured off `BidiBrackets.txt`.  Small enough to be worth stating
+// exactly, because a reader's first guess at how many brackets
+// Unicode has is off by an order of magnitude in one direction or the
+// other.
+pub const BRACKET_PAIR_COUNT = 60
+
+// How many bytes of bracket table are compiled in.
+//
+// A code point, its partner and its type per entry.
+pub const BRACKET_TABLE_BYTES = 960
+
+// Whether a character has the Bidi_Mirrored property.
+//
+// True for about 360 characters: the brackets, the mathematical
+// relations, the angle quotation marks, much of the arrow block.
+// True says only that the character has a mirrored FORM — L4 also
+// requires an odd resolved level before anything is drawn
+// differently, and `mirror_at` is that rule.
+//
+// ```novo
+// use bidimirror
+//
+// fn main() [io]
+//     println("${bidimirror.is_mirrored(0x0028)}")   // true  — (
+//     println("${bidimirror.is_mirrored(0x0061)}")   // false — a
+// ```
+pub fn is_mirrored(ch: Int) -> Bool []
+    todo("bidi-nv.bidimirror.is_mirrored")
+
+// The Bidi_Mirroring_Glyph of a character, or `None`.
+//
+// `None` for a character with no mirror, and also for the handful
+// that are Bidi_Mirrored with no mirrored character to name — the
+// property marks them as mirrored so that a renderer knows to
+// reflect the glyph, and there is no other code point to point at.
+// So `is_mirrored` being true does not imply this answers `Some`, and
+// a caller that assumed it did would substitute nothing and draw the
+// character unreflected.
+//
+// ```novo
+// use bidimirror
+//
+// fn main() [io]
+//     match bidimirror.mirror_of(0x0028)
+//         Some(m) => println("${m}")    // 41 — U+0029, the closing parenthesis
+//         None    => println("no mirrored character")
+// ```
+pub fn mirror_of(ch: Int) -> ?Int []
+    todo("bidi-nv.bidimirror.mirror_of")
+
+// Rule L4: the character to draw at a position, when it is not the
+// character that is stored.
+//
+// `Some(cp)` when the character at `index` is Bidi_Mirrored, its
+// resolved level is odd, and a mirrored code point exists.  `None`
+// otherwise — including for an index out of range, for a mirrored
+// character at an even level, and for a mirrored character with no
+// named mirror.
+//
+// A renderer walks `bidireorder.reorder_line`, asks this at each
+// position, and draws whatever comes back or the stored character if
+// nothing does.  A renderer over a font with an `rtlm` feature
+// ignores this function and lets the shaper do it; see the module
+// comment.
+//
+// ```novo
+// use bidimirror
+// use bidipara
+//
+// fn main() [io]
+//     match bidipara.resolve("(a)", BidiBaseLtr)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             // Level 0 is even, so L4 changes nothing here.
+//             match bidimirror.mirror_at(p, 0)
+//                 Some(m) => println("${m}")
+//                 None    => println("draw the stored character")
+// ```
+pub fn mirror_at(p: bidipara.BidiParagraph, index: Int) -> ?Int []
+    todo("bidi-nv.bidimirror.mirror_at")
+
+// The Bidi_Paired_Bracket_Type of a character.
+//
+// `BidiBracketNone` for everything outside the 120 entries of
+// `BidiBrackets.txt`, which includes most of what `is_mirrored`
+// answers true for.
+//
+// ```novo
+// use bidimirror
+//
+// fn main() [io]
+//     println("${bidimirror.bracket_type(0x005D) == BidiBracketClose}")   // true
+//     println("${bidimirror.bracket_type(0x003C) == BidiBracketNone}")    // true
+// ```
+pub fn bracket_type(ch: Int) -> BidiBracket []
+    todo("bidi-nv.bidimirror.bracket_type")
+
+// The Bidi_Paired_Bracket of a character: the other half of its pair,
+// or `None` when it is not a paired bracket.
+//
+// The property BD16 matches on.  It is not the same table as
+// `mirror_of`, though the two agree for every character that is in
+// both: a bracket's mirror is its partner.
+//
+// ```novo
+// use bidimirror
+//
+// fn main() [io]
+//     match bidimirror.paired_bracket(0x007B)
+//         Some(b) => println("${b}")    // 125 — U+007D
+//         None    => println("not a paired bracket")
+// ```
+pub fn paired_bracket(ch: Int) -> ?Int []
+    todo("bidi-nv.bidimirror.paired_bracket")
+
+// The form of a bracket that BD16 compares.
+//
+// BD16 matches brackets by canonical equivalence, and there is
+// exactly one place in Unicode where that matters: U+2329 LEFT-POINTING
+// ANGLE BRACKET is canonically equivalent to U+3008 LEFT ANGLE
+// BRACKET, and U+232A to U+3009.  A document that opens with one
+// spelling and closes with the other has a matched pair, and an
+// implementation that compared code points would leave both brackets
+// to N1 and N2 and resolve the phrase between them against the
+// paragraph.
+//
+// This function is that normalisation and nothing else: it answers
+// U+3008 for U+2329, U+3009 for U+232A, and the character itself for
+// everything else.  It is published so the rule is checkable, and so
+// that the implementation lane does not have to reach for a
+// normalisation table to honour four code points.
+//
+// ```novo
+// use bidimirror
+//
+// fn main() [io]
+//     println("${bidimirror.canonical_bracket(0x2329)}")   // 12296 — U+3008
+//     println("${bidimirror.canonical_bracket(0x0028)}")   // 40 — U+0028
+// ```
+pub fn canonical_bracket(ch: Int) -> Int []
+    todo("bidi-nv.bidimirror.canonical_bracket")

@@ -1,0 +1,316 @@
+// bidirun.nv — the two groupings UAX #9 works in, and the bracket
+// pairs N0 needs.
+//
+// A LEVEL RUN IS NOT AN ISOLATING RUN SEQUENCE, AND THE RULES USE THE
+// SECOND
+//
+// A LEVEL RUN (BD7) is a maximal range of characters that all ended
+// up at the same level.  It is what L2 reverses and what a shaper
+// wants: one run, one direction, one call into the font.
+//
+// An ISOLATING RUN SEQUENCE (BD13) is a chain of level runs joined
+// across isolates: a run whose last character is an isolate
+// initiator is joined to the run that begins with that initiator's
+// matching PDI.  W1 to W7 and N0 to N2 are all defined over these,
+// not over level runs, and the difference is exactly what makes an
+// isolate an isolate.  Text inside `LRI … PDI` is a separate sequence
+// that the W rules never look out of, so a European digit inside an
+// isolate cannot be turned into an Arabic number by an AL that sits
+// outside it.  A level run alone would have let it.
+//
+// Before Unicode 6.3 there were only embeddings, the two groupings
+// coincided, and an implementation could be written as if only level
+// runs existed.  One written that way today is wrong on any text that
+// uses `FSI` — which is what every modern templating system emits
+// around interpolated user content, precisely because it is the
+// construct that cannot leak.
+//
+// EACH SEQUENCE CARRIES ITS OWN EDGES
+//
+// `sos` and `eos` are the directions X10 computes for the two ends of
+// a sequence: the higher of the sequence's level and the level of the
+// adjacent text, taken as a parity.  They are not decoration.  W1
+// gives a non-spacing mark at the very start of a sequence the `sos`
+// direction, and N1 treats a run of neutrals at either end as if the
+// text beyond it had the edge's direction.  A sequence without its
+// edges cannot be resolved at all, so they are fields rather than
+// something the caller works out.
+//
+// BD16 HAS A LIMIT, AND IT IS 63
+//
+// The bracket-pair stack is fixed at 63 entries.  On the 64th opening
+// bracket of one sequence, BD16 stops — it does not grow, and it does
+// not fail: processing of bracket pairs simply ends for the remainder
+// of that isolating run sequence, and the brackets after it are
+// resolved as ordinary neutrals by N1 and N2.  `MAX_PAIRING_DEPTH` is
+// that number, published because a caller that meets it sees
+// parentheses that stopped matching half way through a line and has
+// no other way to find out why.
+
+use bidilevel
+use bidipara
+
+// A maximal range of characters at one resolved level (BD7).
+//
+// Half-open in character indices: `[start, end)`, the same unit as
+// `bidipara.BidiParagraph.levels`.
+//
+// ```novo
+// use bidipara
+// use bidirun
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  => println("${bidirun.run_count(p)}")    // 1
+// ```
+pub struct BidiRun
+    // The character index of the first character of the run.
+    start: Int
+    // The character index one past the last character of the run.
+    end: Int
+    // The resolved level every character in the run shares.
+    level: Int
+
+// A chain of level runs the W and N rules are applied to (BD13).
+//
+// One sequence for text that no isolate interrupts; several runs
+// joined into one sequence when isolates do.
+//
+// ```novo
+// use bidipara
+// use bidirun
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  => println("${list.len(bidirun.sequences(p))}")   // 1
+// ```
+pub struct BidiSeq
+    // The level runs, in logical order.  Always at least one.
+    runs: [BidiRun]
+    // The level every run in the sequence shares.  A sequence is
+    // built out of runs at one level by construction.
+    level: Int
+    // The direction at the start of the sequence, X10's `sos`.  W1
+    // gives a non-spacing mark in first position this direction, and
+    // N1 reads it for a run of neutrals that begins the sequence.
+    sos: bidilevel.BidiDirection
+    // The direction at the end of the sequence, X10's `eos`.  N1
+    // reads it for a run of neutrals that ends the sequence.
+    eos: bidilevel.BidiDirection
+
+// A matched pair of brackets inside one isolating run sequence
+// (BD16).
+//
+// ```novo
+// use bidirun
+//
+// fn main() [io]
+//     println("${bidirun.MAX_PAIRING_DEPTH}")    // 63
+// ```
+pub struct BidiPair
+    // The character index of the opening bracket.
+    open: Int
+    // The character index of the closing bracket.
+    close: Int
+
+// The size of BD16's bracket-pair stack: 63.
+//
+// Fixed by the specification, not by this implementation.  Past it,
+// BD16 stops for the rest of the isolating run sequence and the
+// remaining brackets are resolved as ordinary neutrals; nothing
+// fails.
+pub const MAX_PAIRING_DEPTH = 63
+
+// Every level run of the paragraph, in logical order (BD7).
+//
+// The runs tile the paragraph: the first begins at character 0, each
+// begins where the last ended, and the last ends at
+// `bidipara.char_count`.  These are the ranges a shaper takes and the
+// ranges L2 reverses.
+//
+// ```novo
+// use bidipara
+// use bidirun
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             for r in bidirun.runs(p)
+//                 println("${r.start} ${r.end} ${r.level}")
+// ```
+pub fn runs(p: bidipara.BidiParagraph) -> [BidiRun] []
+    todo("bidi-nv.bidirun.runs")
+
+// How many level runs the paragraph has.
+//
+// One for a paragraph of a single direction, and more as soon as two
+// scripts meet.  A useful cheap answer to "is there anything
+// bidirectional here at all": a count of one means the whole
+// paragraph is one direction and `bidireorder` will answer the
+// identity order for every line of it.
+//
+// ```novo
+// use bidipara
+// use bidirun
+//
+// fn main() [io]
+//     match bidipara.resolve("plain text", BidiBaseLtr)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  => println("${bidirun.run_count(p)}")    // 1
+// ```
+pub fn run_count(p: bidipara.BidiParagraph) -> Int []
+    todo("bidi-nv.bidirun.run_count")
+
+// The level run a character belongs to, or `None` when the index is
+// out of range.
+//
+// ```novo
+// use bidipara
+// use bidirun
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             match bidirun.run_at(p, 1)
+//                 Some(r) => println("${r.level}")    // 0
+//                 None    => println("no such character")
+// ```
+pub fn run_at(p: bidipara.BidiParagraph, index: Int) -> ?BidiRun []
+    todo("bidi-nv.bidirun.run_at")
+
+// The direction a run reads in: the parity of its level.
+//
+// ```novo
+// use bidilevel
+// use bidipara
+// use bidirun
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseRtl)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             match bidirun.run_at(p, 0)
+//                 Some(r) => println(bidilevel.direction_name(bidirun.run_direction(r)))
+//                 None    => println("no such character")
+// ```
+pub fn run_direction(r: BidiRun) -> bidilevel.BidiDirection []
+    todo("bidi-nv.bidirun.run_direction")
+
+// Every isolating run sequence of the paragraph (BD13), in the order
+// X10 builds them.
+//
+// These are what W1 to W7 and N0 to N2 operate over, so an
+// implementation lane writing those rules iterates this list and
+// never touches `runs`.  A paragraph with no isolates has one
+// sequence per level run; a paragraph with isolates has fewer
+// sequences than runs.
+//
+// ```novo
+// use bidipara
+// use bidirun
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             for s in bidirun.sequences(p)
+//                 println("${s.level} ${list.len(s.runs)}")
+// ```
+pub fn sequences(p: bidipara.BidiParagraph) -> [BidiSeq] []
+    todo("bidi-nv.bidirun.sequences")
+
+// The isolating run sequence a character belongs to, or `None` when
+// the index is out of range.
+//
+// A character belongs to exactly one sequence, X9-removed characters
+// included: they sit in the sequence of the run around them even
+// though no rule after X9 reads them.
+//
+// ```novo
+// use bidipara
+// use bidirun
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             match bidirun.sequence_containing(p, 0)
+//                 Some(s) => println("${s.level}")     // 0
+//                 None    => println("no such character")
+// ```
+pub fn sequence_containing(p: bidipara.BidiParagraph, index: Int) -> ?BidiSeq []
+    todo("bidi-nv.bidirun.sequence_containing")
+
+// The matching PDI of an isolate initiator (BD9), or `None`.
+//
+// `None` when the character at `index` is not an isolate initiator,
+// and also when it is one that has no matching PDI — an initiator
+// whose isolate runs to the end of the paragraph is legal, and P2 and
+// X5c both have to cope with it.  The two cases are distinguished by
+// asking `bidipara.class_at` first.
+//
+// The scan is the specification's own and is not the same one a PDF
+// gets: it counts initiators and PDIs, and an embedding control in
+// between changes nothing.
+//
+// ```novo
+// use bidipara
+// use bidirun
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  => println("${bidirun.matching_pdi(p, 0) == None}")   // true
+// ```
+pub fn matching_pdi(p: bidipara.BidiParagraph, index: Int) -> ?Int []
+    todo("bidi-nv.bidirun.matching_pdi")
+
+// The isolate initiator a PDI matches (BD11), or `None`.
+//
+// `None` when the character at `index` is not a PDI, and also when it
+// is a PDI that matches no initiator — a stray PDI is legal text and
+// is resolved as a neutral.
+//
+// ```novo
+// use bidipara
+// use bidirun
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  => println("${bidirun.matching_isolate(p, 2) == None}")   // true
+// ```
+pub fn matching_isolate(p: bidipara.BidiParagraph, index: Int) -> ?Int []
+    todo("bidi-nv.bidirun.matching_isolate")
+
+// The matched bracket pairs of one isolating run sequence (BD16), in
+// the order N0 processes them: by the position of the opening
+// bracket.
+//
+// A pair is matched on the Bidi_Paired_Bracket property, with the
+// canonical equivalence of U+2329 to U+3008 and U+232A to U+3009
+// applied, so an angle bracket written either way pairs with an angle
+// bracket written the other — see `bidimirror.canonical_bracket`.
+// Only brackets that are still ON after W1 to W7 take part.
+//
+// At most `MAX_PAIRING_DEPTH` openings are tracked.  Past that, the
+// list simply ends: the remaining brackets of the sequence are left
+// to N1 and N2, which is what the specification says to do.
+//
+// ```novo
+// use bidipara
+// use bidirun
+//
+// fn main() [io]
+//     match bidipara.resolve("a (b) c", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             for s in bidirun.sequences(p)
+//                 println("${list.len(bidirun.bracket_pairs(p, s))}")
+// ```
+pub fn bracket_pairs(p: bidipara.BidiParagraph, seq: BidiSeq) -> [BidiPair] []
+    todo("bidi-nv.bidirun.bracket_pairs")

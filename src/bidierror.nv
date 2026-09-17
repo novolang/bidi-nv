@@ -1,0 +1,111 @@
+// bidierror.nv — every way a resolution or a reordering can be
+// refused, and which of them is a fault in the text rather than in
+// the call.
+//
+// FOUR REFUSALS, AND WHY OVERFLOW IS NOT ONE OF THEM
+//
+// UAX #9 defines exactly one numeric limit, `max_depth` = 125 on the
+// explicit embedding depth, and it defines what happens when the
+// limit is passed: rules X1 to X8 count the overflow and carry on,
+// and the algorithm still produces a level for every character.  So
+// deep nesting is NOT an error here.  It is a fact reported on the
+// resolved paragraph — `BidiParagraph.overflow_count` and
+// `BidiParagraph.isolate_overflow_count` — because a caller rendering a
+// document that hit the limit wants to know that the answer is the
+// defined fallback rather than the one the markup asked for, and a
+// caller that refused the document over it would refuse a document
+// every browser renders.
+//
+// What IS refused is the caller doing the algorithm in the wrong
+// order.  `BidiMoreThanOneParagraph` is the one that matters most:
+// rule P1 splits the text into paragraphs FIRST, and every rule after
+// it is defined on one paragraph.  A caller that hands a whole
+// document to `bidipara.resolve` gets, from every other
+// implementation, a silently wrong answer for the second paragraph
+// onwards — the first strong character of paragraph one decides the
+// direction of all of them.  Here it is a named refusal with the
+// offset of the break in it, and `bidipara.split_paragraphs` is the
+// call that was meant.
+
+// Why a paragraph could not be resolved, or a line could not be
+// reordered.
+//
+// ```novo
+// use bidierror
+//
+// fn main() [io]
+//     println(bidierror.message(BidiLevelOutOfRange(200)))
+// ```
+pub enum BidiError
+    // The text handed to a paragraph resolution contains a paragraph
+    // separator that is not its last character, and `at` is the
+    // character index of the first one.  Rule P1 splits the text into
+    // paragraphs before anything else runs, and every rule after it —
+    // P2 included — is defined on a single paragraph.  See
+    // `bidipara.split_paragraphs`.
+    BidiMoreThanOneParagraph(at: Int)
+    // A line range is not inside the paragraph it was asked of.
+    // `start` and `end` are the range as given, and `length` is the
+    // paragraph's length in characters.  Lines are ranges of the
+    // paragraph the levels were resolved on, so a range from a
+    // different paragraph is a caller that resolved one text and
+    // reordered another.
+    BidiLineOutOfRange(start: Int, end: Int, length: Int)
+    // A line range runs backwards: `start` is greater than `end`.
+    // Kept apart from the range check because it is a different
+    // mistake — an off-by-one in a line breaker, rather than a line
+    // taken from the wrong paragraph — and because an empty line,
+    // where `start` equals `end`, is legal and reorders to nothing.
+    BidiLineReversed(start: Int, end: Int)
+    // An explicit paragraph embedding level outside `0` to
+    // `bidilevel.MAX_DEPTH` was requested, and `level` is the value.
+    // Only `bidipara.resolve_at_level` can meet this; the ordinary
+    // entry point derives the level from the text and cannot.
+    BidiLevelOutOfRange(level: Int)
+
+// The refusal as a sentence, ending without a full stop, suitable for
+// a log line or an error message the caller composes.
+//
+// ```novo
+// use bidierror
+//
+// fn main() [io]
+//     println(bidierror.message(BidiMoreThanOneParagraph(37)))
+// ```
+pub fn message(e: BidiError) -> Str []
+    todo("bidi-nv.bidierror.message")
+
+// A short stable identifier for the refusal:
+// `"more-than-one-paragraph"`, `"line-out-of-range"`,
+// `"line-reversed"`, `"level-out-of-range"`.
+//
+// Stable across releases, so a caller may branch on it and a test may
+// assert it.
+//
+// ```novo
+// use bidierror
+//
+// fn main() [io]
+//     println(bidierror.code(BidiLineReversed(9, 4)))   // line-reversed
+// ```
+pub fn code(e: BidiError) -> Str []
+    todo("bidi-nv.bidierror.code")
+
+// Whether the refusal is a fault in the text that was handed in
+// rather than in the call that met it.
+//
+// True only for `BidiMoreThanOneParagraph`, which says the text was
+// never one paragraph and has to be split before anything can be
+// resolved.  False for the other three, which are all about a line
+// range or a level the caller chose, with the paragraph itself
+// perfectly good.
+//
+// ```novo
+// use bidierror
+//
+// fn main() [io]
+//     println("${bidierror.is_text_fault(BidiMoreThanOneParagraph(0))}")   // true
+//     println("${bidierror.is_text_fault(BidiLevelOutOfRange(126))}")      // false
+// ```
+pub fn is_text_fault(e: BidiError) -> Bool []
+    todo("bidi-nv.bidierror.is_text_fault")

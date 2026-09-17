@@ -1,0 +1,395 @@
+// bidipara.nv — resolving one paragraph, and the value every later
+// question is answered from.
+//
+// THE ALGORITHM ANSWERS LEVELS, SO THIS PACKAGE ANSWERS LEVELS
+//
+// The obvious interface for a bidi library is `fn bidi(text) -> Str`,
+// a display-ordered string.  It is the wrong one, and it is wrong in
+// three separate ways at once.
+//
+// It cannot do L1.  Resetting a trailing run of whitespace to the
+// paragraph level is defined over the ORIGINAL classes of the
+// characters, not over their resolved levels, and a function that
+// returned only a string has thrown those away.
+//
+// It cannot do L2 per line.  Levels are resolved on the PARAGRAPH;
+// reordering happens on a LINE; and the line breaks are chosen after
+// the levels exist, by a line breaker measuring glyphs.  A function
+// that reordered as it resolved would have had to know the line
+// breaks before they were decided.
+//
+// And it cannot give a caret back.  A text field asks "the user
+// clicked at visual position 7, which character is that" — a question
+// about the mapping, not about the string.
+//
+// So `resolve` answers a `BidiParagraph`: the text as it was handed
+// in, the paragraph embedding level, a level per character, and the
+// original class per character.  Everything else in the package is a
+// function of that value, `bidireorder` takes it and a line range,
+// and nothing here returns a reordered string at all.
+//
+// RESOLUTION IS PER PARAGRAPH AND REORDERING IS PER LINE
+//
+// This is the single most common misuse of the algorithm, and the
+// types are shaped to make it hard.  There is no entry point that
+// takes a line and answers an order: `bidireorder.reorder_line` takes
+// a `BidiParagraph` and a range within it, so a caller physically
+// cannot reorder a wrapped line without having resolved the whole
+// paragraph first.  A caller that resolved each visual line on its
+// own would get a different paragraph level for a line that happens
+// to begin with a digit, and the wrapped half of an Arabic sentence
+// would flip.
+//
+// And `resolve` REFUSES text containing a paragraph separator that is
+// not its last character, rather than resolving the first paragraph
+// and applying its level to the rest.  `split_paragraphs` is P1, and
+// it is a separate call because P1 is a separate rule.
+//
+// THE PARAGRAPH DIRECTION IS THREE-VALUED
+//
+// `BidiBase` has three arms, not two.  `BidiBaseAuto` is P2 and P3 —
+// find the first strong character, skipping anything between an
+// isolate initiator and its matching PDI, and take level 1 if it is R
+// or AL and level 0 otherwise.  An `auto` that quietly meant LTR is
+// the bug every naive implementation ships, and it is invisible until
+// somebody pastes Arabic into a field whose direction was supposed to
+// follow the text.  `base_direction_of` is P2 and P3 on their own, for
+// a caller that has to set a `dir` attribute and is not resolving
+// anything yet.
+//
+// OVERFLOW IS REPORTED, NOT REFUSED
+//
+// X1 to X8 cap the explicit depth at `bidilevel.MAX_DEPTH` and define
+// the behaviour past it: the overflowing embedding or isolate is
+// counted and ignored, and its matching PDF or PDI is ignored in
+// turn.  Both counts are fields of the answer.  A caller that wants
+// to warn about markup the algorithm could not honour reads
+// `had_overflow`; a caller that does not care never looks, and gets
+// the same levels a browser would show.
+
+use bidiclass
+use bidierror
+use bidilevel
+
+// What paragraph direction the caller wants.
+//
+// Three-valued.  The first two are a higher-level protocol overriding
+// P2 and P3 — an HTML `dir="ltr"`, a terminal set to a language.  The
+// third is P2 and P3 themselves.
+//
+// ```novo
+// use bidipara
+//
+// fn main() [io]
+//     println(bidipara.base_name(BidiBaseAuto))   // auto
+// ```
+pub enum BidiBase
+    // Paragraph embedding level 0, whatever the text says.
+    BidiBaseLtr
+    // Paragraph embedding level 1, whatever the text says.
+    BidiBaseRtl
+    // P2 and P3: the level follows the first strong character of the
+    // paragraph, skipping over everything between an isolate
+    // initiator and its matching PDI.  A paragraph with no strong
+    // character at all takes level 0.
+    BidiBaseAuto
+
+// One paragraph, resolved.
+//
+// Everything the rest of UAX #9 needs, in one value: the text as it
+// was handed in, what was asked for, what P2 and P3 decided, a level
+// per character after I1 and I2, and the ORIGINAL class per
+// character, which L1 reads and nothing else keeps.
+//
+// The fields are public because a value with no readable fields
+// cannot be tested, and because a shaper wants `levels` as a list and
+// not through an accessor per character.
+//
+// ```novo
+// use bidipara
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  => println("${p.level}")    // 0
+// ```
+pub struct BidiParagraph
+    // The text exactly as it was handed to `resolve`, including any
+    // characters X9 removed from the rules' view and including the
+    // paragraph separator if there was one.  Offsets into it are byte
+    // offsets; see `byte_offset_at`.
+    text: Str
+    // What the caller asked for.  Kept because the answer to "why is
+    // this paragraph right-to-left" is either "you said so" or "P2
+    // found a Hebrew letter", and a renderer showing diagnostics
+    // needs to say which.
+    base: BidiBase
+    // The paragraph embedding level: 0 or 1 from `resolve`, or
+    // whatever `resolve_at_level` was given.
+    level: Int
+    // One level per character, after I1 and I2 and before L1.  L1 is
+    // a per-line reset and lives in `bidireorder.line_levels`,
+    // because the line breaks are not known here.  A character X9
+    // removed still has an entry, carrying the level of the run it
+    // sits in, so that this list and `classes` index alike.
+    levels: [Int]
+    // One class per character, as `bidiclass.class_of` answered it,
+    // before W1 rewrote anything.  L1 is defined over these and not
+    // over the resolved classes, which is the reason they are kept.
+    classes: [bidiclass.BidiClass]
+    // How many explicit embeddings or overrides X2 to X5 had to
+    // ignore because they would have passed `bidilevel.MAX_DEPTH`.
+    // Zero for almost every real document.
+    overflow_count: Int
+    // How many isolate initiators X5a to X5c had to ignore for the
+    // same reason.  Counted apart from the embeddings because X6a
+    // pops them apart: an overflowing isolate swallows the next PDI
+    // and an overflowing embedding does not.
+    isolate_overflow_count: Int
+
+// Resolve one paragraph.
+//
+// Runs P2 and P3 when `base` is `BidiBaseAuto`, then X1 to X10, W1 to
+// W7, N0 to N2 and I1 to I2.  Answers `BidiMoreThanOneParagraph` when
+// the text holds a paragraph separator anywhere but at its end; use
+// `split_paragraphs` first.  An empty text resolves to a paragraph
+// with no levels and level 0.
+//
+// ```novo
+// use bidipara
+//
+// fn main() [io]
+//     match bidipara.resolve("a book", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             println("${p.level}")                  // 0
+//             println("${list.len(p.levels)}")       // 6
+// ```
+pub fn resolve(text: Str, base: BidiBase) -> Result<BidiParagraph, bidierror.BidiError> []
+    todo("bidi-nv.bidipara.resolve")
+
+// Resolve one paragraph at an explicit paragraph embedding level.
+//
+// The path P3's note leaves open for a higher-level protocol: a level
+// other than 0 or 1, which `BidiBase` cannot say.  Answers
+// `BidiLevelOutOfRange` for a level outside 0 to
+// `bidilevel.MAX_DEPTH`, and the same
+// `BidiMoreThanOneParagraph` as `resolve`.
+//
+// ```novo
+// use bidipara
+//
+// fn main() [io]
+//     match bidipara.resolve_at_level("a book", 1)
+//         Err(_) => println("that level or that text was refused")
+//         Ok(p)  => println("${p.level}")    // 1
+// ```
+pub fn resolve_at_level(text: Str, level: Int) -> Result<BidiParagraph, bidierror.BidiError> []
+    todo("bidi-nv.bidipara.resolve_at_level")
+
+// Split a text into paragraphs, rule P1.
+//
+// A paragraph separator — class B, which is the line feed, the
+// carriage return, U+001C to U+001E, U+0085 and U+2029 — terminates a
+// paragraph and BELONGS TO IT, so every piece but possibly the last
+// ends with its separator and the pieces concatenate back into the
+// text exactly.  A CRLF is one separator and not two.
+//
+// Each piece is what `resolve` accepts, and each is resolved on its
+// own: two paragraphs of one document may have opposite directions,
+// which is the whole reason P1 comes first.
+//
+// ```novo
+// use bidipara
+//
+// fn main() [io]
+//     println("${list.len(bidipara.split_paragraphs("one\ntwo"))}")   // 2
+// ```
+pub fn split_paragraphs(text: Str) -> [Str] []
+    todo("bidi-nv.bidipara.split_paragraphs")
+
+// The direction P2 and P3 would give this text, without resolving it.
+//
+// The first strong character decides, and the scan skips from an
+// isolate initiator to its matching PDI, so an Arabic phrase inside
+// an LRI does not make the paragraph right-to-left.  A text with no
+// strong character at all — digits, punctuation, an empty string —
+// answers `BidiLtr`, which is P3's "otherwise".
+//
+// This is the call for a caller setting an HTML `dir` attribute or
+// choosing a text field's alignment.  It is a different question from
+// `direction`, which reports what a resolved paragraph actually got.
+//
+// ```novo
+// use bidilevel
+// use bidipara
+//
+// fn main() [io]
+//     let d = bidipara.base_direction_of("123 abc")
+//     println(bidilevel.direction_name(d))    // ltr
+// ```
+pub fn base_direction_of(text: Str) -> bidilevel.BidiDirection []
+    todo("bidi-nv.bidipara.base_direction_of")
+
+// The paragraph embedding level.
+//
+// ```novo
+// use bidipara
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseRtl)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  => println("${bidipara.paragraph_level(p)}")   // 1
+// ```
+pub fn paragraph_level(p: BidiParagraph) -> Int []
+    todo("bidi-nv.bidipara.paragraph_level")
+
+// The direction the paragraph reads in: the parity of its level.
+//
+// ```novo
+// use bidilevel
+// use bidipara
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseRtl)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  => println(bidilevel.direction_name(bidipara.direction(p)))   // rtl
+// ```
+pub fn direction(p: BidiParagraph) -> bidilevel.BidiDirection []
+    todo("bidi-nv.bidipara.direction")
+
+// How many characters the paragraph holds.
+//
+// Unicode scalar values, not bytes, and the length of both `levels`
+// and `classes`.  It is the end of the widest line range
+// `bidireorder` will accept.
+//
+// ```novo
+// use bidipara
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  => println("${bidipara.char_count(p)}")    // 3
+// ```
+pub fn char_count(p: BidiParagraph) -> Int []
+    todo("bidi-nv.bidipara.char_count")
+
+// The resolved level of one character, or `None` when the index is
+// out of range.
+//
+// Before L1.  A caller drawing one line applies L1 first, through
+// `bidireorder.line_levels`, because the reset depends on where the
+// line ends.
+//
+// ```novo
+// use bidipara
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             match bidipara.level_at(p, 0)
+//                 Some(l) => println("${l}")      // 0
+//                 None    => println("no such character")
+// ```
+pub fn level_at(p: BidiParagraph, index: Int) -> ?Int []
+    todo("bidi-nv.bidipara.level_at")
+
+// The ORIGINAL Bidi_Class of one character, or `None` when the index
+// is out of range.
+//
+// What `bidiclass.class_of` answered before W1 rewrote the
+// non-spacing marks and before W3 turned the ALs into Rs.  L1 is
+// defined over these, and so is a caller deciding whether a character
+// is whitespace it may trim.
+//
+// ```novo
+// use bidiclass
+// use bidipara
+//
+// fn main() [io]
+//     match bidipara.resolve("a b", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             match bidipara.class_at(p, 1)
+//                 Some(c) => println(bidiclass.class_name(c))   // WS
+//                 None    => println("no such character")
+// ```
+pub fn class_at(p: BidiParagraph, index: Int) -> ?bidiclass.BidiClass []
+    todo("bidi-nv.bidipara.class_at")
+
+// The byte offset in `p.text` at which a character begins, or `None`
+// when the index is out of range.
+//
+// The bridge between the two units this package deals in: levels and
+// line ranges are counted in characters, and `p.text` is indexed in
+// bytes.  A caller slicing the text for a shaper needs the mapping,
+// and doing it by re-decoding the string is the step everyone gets
+// wrong once.
+//
+// ```novo
+// use bidipara
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             match bidipara.byte_offset_at(p, 2)
+//                 Some(o) => println("${o}")      // 2
+//                 None    => println("no such character")
+// ```
+pub fn byte_offset_at(p: BidiParagraph, index: Int) -> ?Int []
+    todo("bidi-nv.bidipara.byte_offset_at")
+
+// Whether X1 to X8 had to ignore any explicit embedding, override or
+// isolate.
+//
+// True when either overflow count is non-zero.  The levels are still
+// the ones UAX #9 defines, so this is a warning about the document
+// and not about the answer: markup that nested deeper than
+// `bidilevel.MAX_DEPTH` did not do what its author meant, and nothing
+// else will ever say so.
+//
+// ```novo
+// use bidipara
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  => println("${bidipara.had_overflow(p)}")    // false
+// ```
+pub fn had_overflow(p: BidiParagraph) -> Bool []
+    todo("bidi-nv.bidipara.had_overflow")
+
+// The requested base direction as a stable name: `"ltr"`, `"rtl"` or
+// `"auto"`.
+//
+// The three values of HTML's `dir` attribute, so a value printed here
+// goes straight into a template.
+//
+// ```novo
+// use bidipara
+//
+// fn main() [io]
+//     println(bidipara.base_name(BidiBaseRtl))    // rtl
+// ```
+pub fn base_name(b: BidiBase) -> Str []
+    todo("bidi-nv.bidipara.base_name")
+
+// The base direction a name denotes, or `None`.
+//
+// The names `base_name` prints.  `None` rather than a default,
+// because `dir="lrt"` in somebody's template is a mistake worth
+// seeing and a default to LTR is how it stays unseen for a year.
+//
+// ```novo
+// use bidipara
+//
+// fn main() [io]
+//     match bidipara.base_named("auto")
+//         Some(b) => println(bidipara.base_name(b))   // auto
+//         None    => println("not a direction this package has")
+// ```
+pub fn base_named(name: Str) -> ?BidiBase []
+    todo("bidi-nv.bidipara.base_named")

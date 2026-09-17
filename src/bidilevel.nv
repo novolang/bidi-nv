@@ -1,0 +1,195 @@
+// bidilevel.nv — the embedding level, and the arithmetic every other
+// module does on it.
+//
+// A LEVEL IS A NUMBER, AND ITS PARITY IS ITS DIRECTION
+//
+// UAX #9 answers with a number per character, not with a direction
+// per character, and the number carries both facts a renderer needs.
+// Its PARITY is the direction — an even level is left-to-right, an
+// odd level is right-to-left (UAX #9, "Embedding Levels") — and its
+// MAGNITUDE is the nesting depth, which is what rule L2 reverses
+// against.  A library that answered a direction per character would
+// have thrown the magnitude away, and L2 cannot be done without it:
+// reordering is "from the highest level down to the lowest odd level,
+// reverse any contiguous sequence of characters at that level or
+// higher", and "or higher" is a comparison between numbers.
+//
+// So levels are `Int` here rather than a wrapper type.  A wrapper
+// would have to be unwrapped in every one of those comparisons, and
+// `bidipara.BidiParagraph.levels` is an `[Int]` a caller can hand
+// straight to a shaper that expects the same convention every other
+// implementation uses.  What this module publishes instead is the
+// arithmetic, named: the two limits, the parity question, and the
+// two "least greater level of the wanted parity" functions that X2
+// to X5c are written in terms of.
+//
+// THE TWO LIMITS ARE DIFFERENT NUMBERS AND BOTH ARE PUBLISHED
+//
+// `MAX_DEPTH` is 125, the deepest EXPLICIT embedding X1 to X8 will
+// open; past it they count an overflow and carry on.  `MAX_LEVEL` is
+// 126, the highest level a character can end up AT, because I1 adds
+// two to a number at an even level and I2 adds one at an odd one.  A
+// caller sizing a level array by `MAX_DEPTH` is one short, and the
+// character it truncates is the one deep inside the nesting that made
+// the document interesting.
+
+// Which way a run of text at a resolved level reads.
+//
+// Two-valued, deliberately.  This is the ANSWER; the three-valued
+// `bidipara.BidiBase` is the question, and the difference between
+// them is the point of `bidipara.base_direction_of`.
+//
+// ```novo
+// use bidilevel
+//
+// fn main() [io]
+//     println(bidilevel.direction_name(BidiRtl))   // rtl
+// ```
+pub enum BidiDirection
+    // Left to right: the direction of every even level, and of
+    // paragraph level 0.
+    BidiLtr
+    // Right to left: the direction of every odd level, and of
+    // paragraph level 1.
+    BidiRtl
+
+// The deepest explicit embedding or isolate the algorithm will open:
+// 125.
+//
+// UAX #9 calls it `max_depth` and defines what happens past it in X1
+// to X8 — the overflow is counted and the text is still resolved.  It
+// is published because the implementation lane and every caller
+// writing a conformance harness need the same constant, and because
+// a caller generating markup can check its own nesting against it.
+pub const MAX_DEPTH = 125
+
+// The highest level any character can resolve to: 126.
+//
+// One more than `MAX_DEPTH`, because I1 raises an EN or AN at an even
+// level by two and I2 raises an L at an odd level by one.  A caller
+// allocating a table indexed by level allocates `MAX_LEVEL + 1`
+// entries.
+pub const MAX_LEVEL = 126
+
+// The direction a level reads in: `BidiLtr` when the level is even,
+// `BidiRtl` when it is odd.
+//
+// The whole of the parity rule, in one function, so that no caller
+// has to remember which parity is which.
+//
+// ```novo
+// use bidilevel
+//
+// fn main() [io]
+//     println(bidilevel.direction_name(bidilevel.level_direction(0)))   // ltr
+//     println(bidilevel.direction_name(bidilevel.level_direction(3)))   // rtl
+// ```
+pub fn level_direction(level: Int) -> BidiDirection []
+    todo("bidi-nv.bidilevel.level_direction")
+
+// Whether a level is odd, and so reads right to left.
+//
+// The predicate form of `level_direction`, for the caller that is
+// about to branch rather than to name a direction.
+//
+// ```novo
+// use bidilevel
+//
+// fn main() [io]
+//     println("${bidilevel.is_rtl_level(1)}")   // true
+//     println("${bidilevel.is_rtl_level(2)}")   // false
+// ```
+pub fn is_rtl_level(level: Int) -> Bool []
+    todo("bidi-nv.bidilevel.is_rtl_level")
+
+// The least EVEN level greater than `level`.
+//
+// The number X2, X4 and X5a push for a left-to-right embedding,
+// override or isolate: `0` gives `2`, `1` gives `2`, `2` gives `4`.
+//
+// ```novo
+// use bidilevel
+//
+// fn main() [io]
+//     println("${bidilevel.next_even_above(1)}")   // 2
+//     println("${bidilevel.next_even_above(2)}")   // 4
+// ```
+pub fn next_even_above(level: Int) -> Int []
+    todo("bidi-nv.bidilevel.next_even_above")
+
+// The least ODD level greater than `level`.
+//
+// The number X3, X5 and X5b push for a right-to-left embedding,
+// override or isolate: `0` gives `1`, `1` gives `3`, `2` gives `3`.
+//
+// ```novo
+// use bidilevel
+//
+// fn main() [io]
+//     println("${bidilevel.next_odd_above(0)}")   // 1
+//     println("${bidilevel.next_odd_above(1)}")   // 3
+// ```
+pub fn next_odd_above(level: Int) -> Int []
+    todo("bidi-nv.bidilevel.next_odd_above")
+
+// Whether a level may be opened explicitly: `0` to `MAX_DEPTH`
+// inclusive.
+//
+// The check `bidipara.resolve_at_level` runs before it accepts a
+// paragraph level, published so a caller reading a level out of a
+// protocol field can run it first.  It is deliberately NOT the range
+// a RESOLVED level lives in: a resolved level may be `MAX_LEVEL`.
+//
+// ```novo
+// use bidilevel
+//
+// fn main() [io]
+//     println("${bidilevel.level_fits(125)}")   // true
+//     println("${bidilevel.level_fits(126)}")   // false
+// ```
+pub fn level_fits(level: Int) -> Bool []
+    todo("bidi-nv.bidilevel.level_fits")
+
+// The other direction.
+//
+// ```novo
+// use bidilevel
+//
+// fn main() [io]
+//     println(bidilevel.direction_name(bidilevel.opposite(BidiLtr)))   // rtl
+// ```
+pub fn opposite(d: BidiDirection) -> BidiDirection []
+    todo("bidi-nv.bidilevel.opposite")
+
+// The direction as a stable name: `"ltr"` or `"rtl"`.
+//
+// The two names HTML's `dir` attribute and CSS's `direction` property
+// use, so a value printed here is a value a template can put straight
+// into an attribute.
+//
+// ```novo
+// use bidilevel
+//
+// fn main() [io]
+//     println(bidilevel.direction_name(BidiLtr))   // ltr
+// ```
+pub fn direction_name(d: BidiDirection) -> Str []
+    todo("bidi-nv.bidilevel.direction_name")
+
+// The direction a name denotes, or `None`.
+//
+// The names are the ones `direction_name` prints, so an attribute
+// read out of a document round-trips through the pair.  An unknown
+// name is `None` rather than a default, because `dir="ltr"` misspelt
+// is a document that meant something and a default would hide it.
+//
+// ```novo
+// use bidilevel
+//
+// fn main() [io]
+//     match bidilevel.direction_named("rtl")
+//         Some(d) => println(bidilevel.direction_name(d))   // rtl
+//         None    => println("not a direction this package has")
+// ```
+pub fn direction_named(name: Str) -> ?BidiDirection []
+    todo("bidi-nv.bidilevel.direction_named")

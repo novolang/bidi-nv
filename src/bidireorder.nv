@@ -1,0 +1,228 @@
+// bidireorder.nv — L1 to L3: turning a paragraph's levels into the
+// order one LINE is drawn in.
+//
+// EVERY FUNCTION HERE TAKES A LINE RANGE, AND THAT IS THE POINT
+//
+// Levels are resolved on the paragraph.  Reordering happens on the
+// line.  The two are separate because the line breaks are chosen
+// AFTER the levels exist — a line breaker measures glyphs, and it can
+// only measure them once it knows which direction each run reads in.
+//
+// A caller that resolved each visual line on its own instead would
+// get a different paragraph level for any line that happens to start
+// with a digit or a space, and the second half of a wrapped Arabic
+// sentence would flip against the first.  So there is no entry point
+// in this module that takes a `Str`.  Every one of them takes a
+// `bidipara.BidiParagraph` and a half-open range of character indices
+// within it, and a range that is not inside that paragraph is
+// refused by name rather than clamped.
+//
+// L1 IS WHY THE PARAGRAPH KEEPS THE ORIGINAL CLASSES
+//
+// L1 resets four things to the paragraph level: every segment
+// separator, every paragraph separator, any sequence of whitespace
+// and isolate formatting characters immediately before one of those,
+// and any such sequence at the END OF THE LINE.  The rule is defined
+// over the ORIGINAL types of the characters, not over the types W1 to
+// W7 left behind, and a paragraph that had thrown those away could
+// not perform it.  `bidipara.BidiParagraph.classes` is kept for
+// exactly this rule.
+//
+// The last clause is the one a caller notices: it is what stops the
+// trailing spaces of a right-to-left line from being dragged to the
+// left margin, and it depends on where the line ENDS — so L1 cannot
+// be folded into the paragraph resolution, and `bidipara`'s levels
+// are deliberately the ones from before it.
+//
+// THE ANSWER IS A PERMUTATION, NOT A STRING
+//
+// `reorder_line` answers the character indices of the line in visual
+// order.  A renderer walks it and draws; a caret walks
+// `logical_to_visual` and lands in the right place; a test compares
+// it with the reordering column of `BidiCharacterTest.txt`, which is
+// written in exactly this form.  `reordered_text` builds the string
+// for the callers that really do want one — a terminal, a test
+// harness — and it is the only function here that allocates one.
+//
+// L3 IS NOT DONE HERE.  Reordering a combining mark to stay with its
+// base character at a right-to-left level is a rule about glyphs, and
+// this package never sees a glyph.  The mark keeps the level of its
+// base, which is what L3 needs in order to be performed by whatever
+// does the drawing.
+
+use bidierror
+use bidipara
+
+// The levels of one line, with L1 applied.
+//
+// One entry per character of `[start, end)`, so the list is
+// `end - start` long and is indexed relative to the line rather than
+// to the paragraph.  A character X9 removed carries the level of the
+// run around it, the same convention `bidipara.BidiParagraph.levels`
+// uses.
+//
+// These are the levels to hand a shaper.  `bidipara`'s are the levels
+// before L1, and they differ at the end of any line that ends in
+// whitespace — which, in a wrapped paragraph, is almost all of them.
+//
+// ```novo
+// use bidipara
+// use bidireorder
+//
+// fn main() [io]
+//     match bidipara.resolve("a b", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             match bidireorder.line_levels(p, 0, 3)
+//                 Err(_) => println("that range is not a line of this paragraph")
+//                 Ok(ls) => println("${list.len(ls)}")    // 3
+// ```
+pub fn line_levels(p: bidipara.BidiParagraph, start: Int,
+                   end: Int) -> Result<[Int], bidierror.BidiError> []
+    todo("bidi-nv.bidireorder.line_levels")
+
+// The characters of the line that are drawn, in LOGICAL order.
+//
+// The paragraph character indices in `[start, end)`, with the ones
+// X9 removes left out: LRE, RLE, LRO, RLO, PDF and BN.  The isolate
+// initiators and PDI are NOT removed — they are ordinary characters
+// with levels, they are simply invisible, and `BidiCharacterTest.txt`
+// lists them in its reordering column for that reason.
+//
+// This is the list `reorder_line` permutes, and a caller that wants
+// to know which characters a visual position can refer to asks here.
+//
+// ```novo
+// use bidipara
+// use bidireorder
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             match bidireorder.visible_indices(p, 0, 3)
+//                 Err(_) => println("that range is not a line of this paragraph")
+//                 Ok(is) => println("${list.len(is)}")    // 3
+// ```
+pub fn visible_indices(p: bidipara.BidiParagraph, start: Int,
+                       end: Int) -> Result<[Int], bidierror.BidiError> []
+    todo("bidi-nv.bidireorder.visible_indices")
+
+// The line in visual order, rule L2.
+//
+// Answers the paragraph character indices of the line's visible
+// characters, left to right on the screen.  The first entry is drawn
+// leftmost whatever the paragraph direction, because a screen has a
+// left edge and a paragraph does not.
+//
+// L1 is applied first, so a trailing run of whitespace sits at the
+// paragraph level and stays at the margin the reader expects.
+// Characters X9 removed are absent, exactly as they are from
+// `visible_indices`.
+//
+// Refuses `BidiLineOutOfRange` for a range outside the paragraph and
+// `BidiLineReversed` when `start` is greater than `end`.  An empty
+// range is legal and answers an empty list.
+//
+// ```novo
+// use bidipara
+// use bidireorder
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             match bidireorder.reorder_line(p, 0, 3)
+//                 Err(_) => println("that range is not a line of this paragraph")
+//                 Ok(o)  => println("${o[0]} ${o[1]} ${o[2]}")    // 0 1 2
+// ```
+pub fn reorder_line(p: bidipara.BidiParagraph, start: Int,
+                    end: Int) -> Result<[Int], bidierror.BidiError> []
+    todo("bidi-nv.bidireorder.reorder_line")
+
+// Where each visible character of the line is drawn.
+//
+// The inverse of `reorder_line`, over the same characters and in the
+// same units: entry `i` is the visual position of the `i`-th entry of
+// `visible_indices`.  So `reorder_line` answers "what is drawn here"
+// and this answers "where is this drawn", and a text field needs both
+// — one to paint, the other to put a caret where the user clicked.
+//
+// Published rather than left to the caller because inverting a
+// permutation is three lines that are wrong the first time, and
+// because the two lists have to agree about which characters exist at
+// all.
+//
+// ```novo
+// use bidipara
+// use bidireorder
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             match bidireorder.logical_to_visual(p, 0, 3)
+//                 Err(_) => println("that range is not a line of this paragraph")
+//                 Ok(v)  => println("${v[0]}")    // 0
+// ```
+pub fn logical_to_visual(p: bidipara.BidiParagraph, start: Int,
+                         end: Int) -> Result<[Int], bidierror.BidiError> []
+    todo("bidi-nv.bidireorder.logical_to_visual")
+
+// Whether the line is drawn in the order it is stored.
+//
+// True when `reorder_line` would answer the identity permutation, and
+// the cheap way to ask it: a paragraph that is one level run has
+// nothing to reorder on any line, and a terminal drawing a log file
+// asks this once per line rather than building a permutation it will
+// not use.
+//
+// It is not the same question as "is the paragraph left-to-right".  A
+// wholly right-to-left line of a right-to-left paragraph is one run,
+// reverses once, and is NOT in storage order.
+//
+// ```novo
+// use bidipara
+// use bidireorder
+//
+// fn main() [io]
+//     match bidipara.resolve("plain text", BidiBaseLtr)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             match bidireorder.is_identity_order(p, 0, 10)
+//                 Err(_) => println("that range is not a line of this paragraph")
+//                 Ok(b)  => println("${b}")    // true
+// ```
+pub fn is_identity_order(p: bidipara.BidiParagraph, start: Int,
+                         end: Int) -> Result<Bool, bidierror.BidiError> []
+    todo("bidi-nv.bidireorder.is_identity_order")
+
+// The line's characters, in visual order, as a string.
+//
+// The convenience the other five do not offer, for a terminal that
+// draws left to right and for a conformance harness comparing text.
+// It is the only function in this package that builds a new string.
+//
+// **Mirroring is NOT applied.**  L4 replaces a bracket at an odd
+// level with its mirror, and doing it here would produce a string
+// whose characters are no longer the caller's own — a copy in which
+// `(` has silently become `)`, which is wrong to search, wrong to
+// copy back out, and wrong to hand to a font that does the mirroring
+// itself.  `bidimirror.mirror_at` answers which characters mirror,
+// and the renderer decides.
+//
+// ```novo
+// use bidipara
+// use bidireorder
+//
+// fn main() [io]
+//     match bidipara.resolve("abc", BidiBaseAuto)
+//         Err(_) => println("that text is not one paragraph")
+//         Ok(p)  =>
+//             match bidireorder.reordered_text(p, 0, 3)
+//                 Err(_) => println("that range is not a line of this paragraph")
+//                 Ok(s)  => println(s)    // abc
+// ```
+pub fn reordered_text(p: bidipara.BidiParagraph, start: Int,
+                      end: Int) -> Result<Str, bidierror.BidiError> []
+    todo("bidi-nv.bidireorder.reordered_text")

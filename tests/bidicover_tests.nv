@@ -1,0 +1,201 @@
+// bidicover_tests.nv — the level arithmetic, the two groupings and
+// the two mirroring tables, one written expectation each.
+//
+// RED ON PURPOSE, like every suite here.
+//
+// The three suites beside this one assert the ALGORITHM — the
+// paragraph rules against `BidiCharacterTest.txt`, the property
+// table against `BidiTest.txt`, the reordering against both.  This
+// one exists so that no public function ships without a written
+// expectation of what it answers, and so that the three facts a
+// caller meets before any text is resolved are asserted rather than
+// only described: that a level's parity is its direction, that an
+// isolating run sequence is not a level run, and that Bidi_Mirrored
+// and Bidi_Paired_Bracket are two different properties.
+
+use std.test
+use bidiclass
+use bidilevel
+use bidimirror
+use bidipara
+use bidirun
+
+@test
+fn test_a_levels_parity_is_its_direction() [io]
+    test.case("even is left to right and odd is right to left, at every depth")
+    test.assert(bidilevel.direction_name(bidilevel.level_direction(0)) == "ltr")
+    test.assert(bidilevel.direction_name(bidilevel.level_direction(1)) == "rtl")
+    test.assert(bidilevel.direction_name(bidilevel.level_direction(126)) == "ltr")
+    test.assert(bidilevel.is_rtl_level(1))
+    test.assert(bidilevel.is_rtl_level(2) == false)
+
+    test.case("the two directions are each other's opposite")
+    test.assert(bidilevel.direction_name(bidilevel.opposite(BidiLtr)) == "rtl")
+    test.assert(bidilevel.direction_name(bidilevel.opposite(BidiRtl)) == "ltr")
+
+    test.case("the names are the `dir` attribute's and they round-trip")
+    match bidilevel.direction_named("rtl")
+        None    => test.fail("rtl is one of the two")
+        Some(d) => test.assert(bidilevel.direction_name(d) == "rtl")
+    test.assert_none(bidilevel.direction_named("auto"))
+
+@test
+fn test_the_explicit_limit_and_the_resolved_limit_are_different_numbers() [io]
+    // A caller that sized a level table by MAX_DEPTH is one short,
+    // and the character it truncates is the one deep inside the
+    // nesting that made the document interesting.
+    test.case("125 is the deepest explicit embedding and 126 the deepest level")
+    test.assert(bidilevel.MAX_DEPTH == 125)
+    test.assert(bidilevel.MAX_LEVEL == 126)
+    test.assert(bidilevel.MAX_LEVEL == bidilevel.MAX_DEPTH + 1)
+
+    test.case("only an explicit level is checked against MAX_DEPTH")
+    test.assert(bidilevel.level_fits(0))
+    test.assert(bidilevel.level_fits(125))
+    test.assert(bidilevel.level_fits(126) == false)
+    test.assert(bidilevel.level_fits(0 - 1) == false)
+
+    test.case("the two pushes X2 to X5c are written in terms of")
+    test.assert(bidilevel.next_even_above(0) == 2)
+    test.assert(bidilevel.next_even_above(1) == 2)
+    test.assert(bidilevel.next_even_above(2) == 4)
+    test.assert(bidilevel.next_odd_above(0) == 1)
+    test.assert(bidilevel.next_odd_above(1) == 3)
+    test.assert(bidilevel.next_odd_above(2) == 3)
+
+@test
+fn test_a_level_run_and_an_isolating_run_sequence_are_two_groupings() [io]
+    test.case("text of one direction is one run and one sequence")
+    match bidipara.resolve("abc", BidiBaseLtr)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            test.assert(bidirun.run_count(p) == 1)
+            test.assert(list.len(bidirun.runs(p)) == 1)
+            test.assert(list.len(bidirun.sequences(p)) == 1)
+
+    test.case("a run tiles the paragraph and knows its own direction")
+    match bidipara.resolve("abc", BidiBaseLtr)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            match bidirun.run_at(p, 1)
+                None    => test.fail("character 1 is in a run")
+                Some(r) =>
+                    test.assert(r.start == 0)
+                    test.assert(r.end == 3)
+                    test.assert(r.level == 0)
+                    test.assert(bidilevel.direction_name(bidirun.run_direction(r)) == "ltr")
+            test.assert_none(bidirun.run_at(p, 99))
+
+    test.case("two scripts in one paragraph are two runs")
+    match bidipara.resolve("abc אבג", BidiBaseLtr)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  => test.assert(bidirun.run_count(p) > 1)
+
+    test.case("and a sequence carries its own edges, which the N rules read")
+    match bidipara.resolve("abc", BidiBaseLtr)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            match bidirun.sequence_containing(p, 0)
+                None    => test.fail("character 0 is in a sequence")
+                Some(s) =>
+                    test.assert(s.level == 0)
+                    test.assert(list.len(s.runs) == 1)
+                    test.assert(bidilevel.direction_name(s.sos) == "ltr")
+                    test.assert(bidilevel.direction_name(s.eos) == "ltr")
+            test.assert_none(bidirun.sequence_containing(p, 99))
+
+@test
+fn test_an_isolate_initiator_is_matched_to_its_own_pdi() [io]
+    // BD9 and BD11.  An RLI around Hebrew inside a left-to-right
+    // paragraph: the initiator is at 1, the PDI at 4, and the two
+    // find each other across the text between them.
+    let text = "a⁧אב⁩b"
+
+    test.case("the text is six characters and the classes are the four expected")
+    match bidipara.resolve(text, BidiBaseLtr)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            test.assert(bidipara.char_count(p) == 6)
+            match bidipara.class_at(p, 1)
+                None    => test.fail("character 1 exists")
+                Some(c) =>
+                    test.assert(bidiclass.class_name(c) == "RLI")
+                    test.assert(bidiclass.is_isolate_initiator(c))
+
+    test.case("the initiator finds its PDI and the PDI finds its initiator")
+    match bidipara.resolve(text, BidiBaseLtr)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            match bidirun.matching_pdi(p, 1)
+                None    => test.fail("that RLI has a matching PDI")
+                Some(i) => test.assert(i == 4)
+            match bidirun.matching_isolate(p, 4)
+                None    => test.fail("that PDI has a matching initiator")
+                Some(i) => test.assert(i == 1)
+
+    test.case("an ordinary character matches nothing in either direction")
+    match bidipara.resolve(text, BidiBaseLtr)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            test.assert_none(bidirun.matching_pdi(p, 0))
+            test.assert_none(bidirun.matching_isolate(p, 0))
+
+@test
+fn test_bd16_pairs_brackets_and_its_stack_is_sixty_three() [io]
+    test.case("the stack size is the specification's, not this implementation's")
+    test.assert(bidirun.MAX_PAIRING_DEPTH == 63)
+
+    test.case("a parenthesised phrase is one pair, found by its opening bracket")
+    match bidipara.resolve("a (b) c", BidiBaseLtr)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            let seqs = bidirun.sequences(p)
+            test.assert(list.len(seqs) == 1)
+            let pairs = bidirun.bracket_pairs(p, seqs[0])
+            test.assert(list.len(pairs) == 1)
+            test.assert(pairs[0].open == 2)
+            test.assert(pairs[0].close == 4)
+
+    test.case("unmatched brackets are left to N1 and N2 and are not pairs")
+    match bidipara.resolve("a (b c", BidiBaseLtr)
+        Err(_) => test.fail("that text is one paragraph")
+        Ok(p)  =>
+            let seqs = bidirun.sequences(p)
+            test.assert(list.len(bidirun.bracket_pairs(p, seqs[0])) == 0)
+
+@test
+fn test_bidi_mirrored_is_not_bidi_paired_bracket() [io]
+    // Two properties, two tables, two rules.  A less-than sign is
+    // mirrored and is not a bracket; N0 only ever looks at brackets.
+    test.case("a parenthesis is mirrored and names its mirror")
+    test.assert(bidimirror.is_mirrored(0x0028))
+    match bidimirror.mirror_of(0x0028)
+        None    => test.fail("the opening parenthesis has a mirror")
+        Some(m) => test.assert(m == 0x0029)
+
+    test.case("a letter is neither mirrored nor a bracket")
+    test.assert(bidimirror.is_mirrored(0x0061) == false)
+    test.assert_none(bidimirror.mirror_of(0x0061))
+    test.assert(bidimirror.bracket_type(0x0061) == BidiBracketNone)
+
+    test.case("a less-than sign is mirrored and is NOT a paired bracket")
+    test.assert(bidimirror.is_mirrored(0x003C))
+    test.assert(bidimirror.bracket_type(0x003C) == BidiBracketNone)
+    test.assert_none(bidimirror.paired_bracket(0x003C))
+
+    test.case("the three bracket types are told apart")
+    test.assert(bidimirror.bracket_type(0x0028) == BidiBracketOpen)
+    test.assert(bidimirror.bracket_type(0x005D) == BidiBracketClose)
+    match bidimirror.paired_bracket(0x007B)
+        None    => test.fail("the opening brace is a paired bracket")
+        Some(b) => test.assert(b == 0x007D)
+
+    test.case("BD16 matches by canonical equivalence, and there is one such pair")
+    test.assert(bidimirror.canonical_bracket(0x2329) == 0x3008)
+    test.assert(bidimirror.canonical_bracket(0x232A) == 0x3009)
+    test.assert(bidimirror.canonical_bracket(0x0028) == 0x0028)
+
+    test.case("and both tables state their own size")
+    test.assert(bidimirror.MIRROR_PAIR_COUNT > bidimirror.BRACKET_PAIR_COUNT)
+    test.assert(bidimirror.MIRROR_TABLE_BYTES > 0)
+    test.assert(bidimirror.BRACKET_TABLE_BYTES > 0)
