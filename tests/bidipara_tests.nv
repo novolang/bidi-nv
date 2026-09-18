@@ -20,14 +20,16 @@
 //   5. the visible characters, in visual order, as indices into
 //      field 1 — the characters X9 removed are absent
 //
-// A NOTE THE IMPLEMENTATION LANE WILL NEED: field 1 cannot be turned
-// back into a `Str` with anything the standard library has.
-// `str.from_char` narrows its argument to one byte and answers
-// mojibake for every code point above U+007F, silently — filed as
-// stdlib/str-from-char-truncates-a-non-ascii-code-point.  So the
-// vectors below are parsed to code points for the class-level
-// assertions, and the text a vector denotes is written out as a
-// literal wherever a `Str` is needed.
+// THE READER ANSWERS THE TEXT TOO, which is what makes the vectors
+// drivable.  `str.from_char` encodes a code point as UTF-8 —
+// `str.from_char(0x05D0)` is the two bytes of the Hebrew alef — so
+// field 1 becomes the `Str` the vector denotes and the suite hands the
+// package the file's own text rather than a literal copied beside it.
+// It did not until 0.9.1: `from_char` narrowed its argument to one
+// byte and answered mojibake for every code point above U+007F,
+// silently, and the text a vector denoted had to be written out by
+// hand.  That is what this package's toolchain floor of `>= 0.9.1`
+// buys.
 
 use std.test
 use bidiclass
@@ -47,6 +49,10 @@ struct BidiCharVector
     levels: [Str]
     // Field 5: the visible characters, in visual order.
     order: [Int]
+    // Field 1 again, as the text it denotes.  Kept beside the code
+    // points because the class-level assertions want the numbers and
+    // every call into the package wants the string.
+    text: Str
 
 // Six lines of `BidiCharacterTest.txt`, copied unaltered.
 fn character_vectors() -> [Str]
@@ -56,6 +62,21 @@ fn character_vectors() -> [Str]
      "05D0 0020 0031 0032;1;1;1 1 2 2;2 3 1 0",
      "05D0 0028 05D1 0029 05D2;1;1;1 1 1 1 1;4 3 2 1 0",
      "0061 202B 05D0 202C 0062;0;0;0 x 1 x 0;0 2 4"]
+
+// The text a list of code points denotes.  One `str.from_char` per
+// code point and nothing else: the function encodes UTF-8, so a
+// code point above U+007F comes back as its two, three or four bytes.
+fn vector_text(cps: [Int]) -> Str
+    str.join(list.map(cps, c => str.from_char(c)), "")
+
+// Field 2 — 0, 1 or 2 — as the argument `bidipara.resolve` takes.
+fn vector_base(field: Int) -> BidiBase
+    if field == 1
+        BidiBaseRtl
+    elif field == 2
+        BidiBaseAuto
+    else
+        BidiBaseLtr
 
 // The value of one hexadecimal field, as the file writes them: four
 // to six upper-case digits.
@@ -77,12 +98,14 @@ fn char_words(s: Str) -> [Str]
 // One line of the file.
 fn parse_character_vector(line: Str) -> BidiCharVector
     let f = str.split(line, ";")
+    let cps = list.map(char_words(f[0]), hex_value)
     BidiCharVector {
-        codepoints: list.map(char_words(f[0]), hex_value),
+        codepoints: cps,
         base: str.to_int(str.trim(f[1])) ?? 0 - 1,
         level: str.to_int(str.trim(f[2])) ?? 0 - 1,
         levels: char_words(f[3]),
-        order: list.map(char_words(f[4]), d => str.to_int(d) ?? 0 - 1) }
+        order: list.map(char_words(f[4]), d => str.to_int(d) ?? 0 - 1),
+        text: vector_text(cps) }
 
 @test
 fn test_the_conformance_lines_parse_in_the_upstream_format() [io]
@@ -108,11 +131,31 @@ fn test_the_conformance_lines_parse_in_the_upstream_format() [io]
     test.assert(list.len(removed.order) == 3)
     test.assert(list.len(removed.codepoints) == 5)
 
+    test.case("field 1 is the text the vector denotes, encoded as UTF-8")
+    // The one literal left in the suite, and it is the assertion
+    // rather than the workaround: it says what the reader must build.
+    let hebrew = parse_character_vector(character_vectors()[1])
+    test.assert(hebrew.text == "אבג")
+    test.assert(str.len(hebrew.text) == 6)
+    test.assert(list.len(str.chars(hebrew.text)) == 3)
+
     test.case("and the classes of the code points are what the vector implies")
     // This is the first assertion that reaches the package.
     test.assert(bidiclass.class_name(bidiclass.class_of(removed.codepoints[1])) == "RLE")
     test.assert(bidiclass.class_name(bidiclass.class_of(removed.codepoints[3])) == "PDF")
     test.assert(bidiclass.is_removed_by_x9(bidiclass.class_of(removed.codepoints[1])))
+
+    test.case("and every vector's own text resolves to the level field 3 gives")
+    // The reader driving the package from the file's format, which is
+    // what the implementation lane will run over the whole ninety
+    // thousand lines.
+    for line in character_vectors()
+        let v = parse_character_vector(line)
+        match bidipara.resolve(v.text, vector_base(v.base))
+            Err(_) => test.fail("every vector is one paragraph")
+            Ok(p)  =>
+                test.assert(bidipara.char_count(p) == list.len(v.codepoints))
+                test.assert(bidipara.paragraph_level(p) == v.level)
 
 @test
 fn test_p2_and_p3_read_the_first_strong_character() [io]

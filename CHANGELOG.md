@@ -5,6 +5,35 @@ All notable changes to bidi-nv are recorded here. The format is
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
+## [0.0.2] — 2026-09-18
+
+### Changed
+
+- **The conformance readers build the text from the vector.**
+  `BidiCharacterTest.txt` states its vectors as hexadecimal code
+  points, and `str.from_char` now encodes one as UTF-8, so
+  `bidipara_tests` carries the text as a fifth field of the parsed
+  vector and `bidireorder_tests` reads field 1 back the same way.  The
+  two calls into the package that were handed a literal copied beside
+  the vector — the three Hebrew letters, and the five code points with
+  an RLE and a PDF among them — are now handed the vector's own text.
+  The literal that remains is an assertion about the encoding rather
+  than a stand-in for it.
+- **The workaround is gone from the Known list.**  0.0.1 recorded "a
+  code point cannot be turned back into a string" and named the filing
+  stdlib/str-from-char-truncates-a-non-ascii-code-point; the filing is
+  fixed on `main` after 0.9.0 and ships in 0.9.1, so the entry is
+  removed rather than left to be read as current.
+
+### Requires
+
+- **`novo = ">= 0.9.1"`**, up from `>= 0.9.0`.  The suites call
+  `str.from_char` on code points above U+007F, and a 0.9.0 toolchain
+  answers one truncated byte for each — the readers would parse and
+  then assert against mojibake.  `src/` still needs nothing newer than
+  0.9.0; the floor is the whole package's claim, and 0.0.1's Known list
+  already said in prose that the tests needed a toolchain past 0.9.0.
+
 ## [0.0.1] — 2026-09-17
 
 **The interface, published before anyone implements it.** Every public
@@ -141,15 +170,6 @@ doc comment; every body is `todo()`; the release is recorded
   suites in the upstream formats, beside the two readers that parse
   them, because the implementation lane will want exactly those
   readers to drive the rest of the files.
-- **A code point cannot be turned back into a string.**
-  `BidiCharacterTest.txt` states its vectors as hexadecimal code
-  points, and `str.from_char` narrows its argument to one byte and
-  answers mojibake for everything above U+007F, silently; nothing else
-  in the standard library encodes a code point. Filed as
-  stdlib/str-from-char-truncates-a-non-ascii-code-point. The suites
-  work around it by parsing the vectors to `[Int]` for the
-  class-level assertions and writing the text a vector denotes as a
-  literal, and the site names the filing.
 - **L3 is not in the surface.** Reordering a combining mark to stay
   with its base character at a right-to-left level is a rule about
   glyphs, and this package never sees one. The mark carries the level

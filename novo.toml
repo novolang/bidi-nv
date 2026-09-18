@@ -1,6 +1,6 @@
 [package]
 name        = "bidi-nv"
-version     = "0.0.1"
+version     = "0.0.2"
 description = "The Unicode Bidirectional Algorithm of UAX #9 as a resolution that answers LEVELS: one paragraph at a time, with the three-valued paragraph direction of P2/P3, the explicit embeddings and isolates of X1-X8 to the depth limit of 125, the weak, bracket-pair and neutral resolutions of W1-W7 and N0-N2 over the isolating run sequences of BD13, and reordering and mirroring published separately as the per-LINE questions L1-L4 actually are."
 license     = "Apache-2.0"
 
@@ -25,7 +25,13 @@ category    = "text"
 tags        = ["bidi", "bidirectional", "uax-9", "unicode", "rtl", "arabic", "hebrew", "reordering", "text"]
 repository  = "https://github.com/novolang/bidi-nv"
 maintainers = ["novo-lang"]
-novo        = ">= 0.9.0"
+# `>= 0.9.1` and not `>= 0.9.0`: the conformance suites turn
+# `BidiCharacterTest.txt`'s hexadecimal code points back into text with
+# `str.from_char`, which encodes UTF-8 from 0.9.1 and truncated to one
+# byte before it.  `src/` needs nothing newer than 0.9.0 — no module
+# under it calls the function — but the floor is the package's claim
+# and a toolchain that cannot run the suites cannot check the release.
+novo        = ">= 0.9.1"
 
 # A library: no `main`, so `novo pkg build` type-checks and
 # effect-checks every module under `src/` and writes no binary.

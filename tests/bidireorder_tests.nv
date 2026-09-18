@@ -10,10 +10,13 @@
 // exactly what `bidireorder.reorder_line` answers, which is why the
 // permutation is the published form and a display string is not.
 //
-// The reader here is the small one: two accessors over the two
+// The reader here is the small one: three accessors over three
 // columns, because that is all this suite needs and because the
 // implementation lane will want them separately when it bisects a
-// failing vector.
+// failing vector.  Field 1 is read back into a `Str` with
+// `str.from_char`, which encodes a code point as UTF-8; before 0.9.1
+// it narrowed to one byte, and the text each vector denotes had to be
+// written out as a literal beside the vector it came from.
 
 use std.test
 use bidierror
@@ -31,6 +34,26 @@ fn line_vectors() -> [Str]
 // A whitespace-separated field, with the empty pieces dropped.
 fn order_words(s: Str) -> [Str]
     list.filter(str.split(str.trim(s), " "), piece => str.is_empty(piece) == false)
+
+// The value of one hexadecimal field, as the file writes them: four
+// to six upper-case digits.
+fn hex_value(s: Str) -> Int
+    var v = 0
+    for i in 0..str.len(s)
+        let b = str.byte_at_or(s, i, 48)
+        if b >= 48 and b <= 57
+            v = v * 16 + (b - 48)
+        else
+            v = v * 16 + (b - 55)
+    v
+
+// Field 1: the text the vector denotes.  One `str.from_char` per code
+// point, which encodes UTF-8, so the two bytes of a Hebrew letter come
+// back as one character and not as two questions marks.
+fn vector_text(line: Str) -> Str
+    str.join(list.map(order_words(str.split(line, ";")[0]),
+                      h => str.from_char(hex_value(h))),
+                      "")
 
 // Field 4: one level per character, `"x"` where X9 removed it.
 fn expected_levels(line: Str) -> [Str]
@@ -57,9 +80,10 @@ fn test_the_conformance_columns_parse_and_are_the_published_shape() [io]
     test.assert(expected_order(embedded)[1] == 2)
 
     test.case("and the package answers field 5 for the first of them")
-    // Three Hebrew letters with an auto paragraph direction.  The
-    // first assertion that reaches the package.
-    match bidipara.resolve("אבג", BidiBaseAuto)
+    // Three Hebrew letters with an auto paragraph direction, and the
+    // text comes from the vector rather than from a literal beside
+    // it.  The first assertion that reaches the package.
+    match bidipara.resolve(vector_text(plain), BidiBaseAuto)
         Err(_) => test.fail("three Hebrew letters are one paragraph")
         Ok(p)  =>
             match bidireorder.reorder_line(p, 0, 3)
@@ -71,7 +95,10 @@ fn test_the_conformance_columns_parse_and_are_the_published_shape() [io]
                     test.assert(o[2] == expected_order(plain)[2])
 
     test.case("and field 5 again for the vector whose embeddings are removed")
-    match bidipara.resolve("a‫א‬b", BidiBaseLtr)
+    // RLE and PDF are invisible, so this text read as a literal said
+    // nothing about what was in it; read from the vector it says
+    // exactly which five code points X9 is being asked about.
+    match bidipara.resolve(vector_text(embedded), BidiBaseLtr)
         Err(_) => test.fail("that text is one paragraph")
         Ok(p)  =>
             match bidireorder.visible_indices(p, 0, 5)
