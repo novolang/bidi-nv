@@ -98,7 +98,8 @@ doc comment; every body is `todo()`; the release is recorded
 - `bidierror` — four refusals, with `code` stable across releases and
   `is_text_fault` separating the one that says the text was never one
   paragraph from the three that are about a line range or a level the
-  caller chose.
+  caller chose. `BidiError` implements `Error`, which SPEC § 3.4
+  requires of a `Result`'s error type; no signature changed.
 
 ### Decided
 
@@ -128,6 +129,12 @@ doc comment; every body is `todo()`; the release is recorded
 - `novo test` is red, and that is the release's expected state: every
   assertion in the API suites reaches `not implemented:
   bidi-nv.<module>.<fn>`.
+- **The tests need a toolchain newer than 0.9.0.** Their conformance
+  readers pass `d => str.to_int(d) ?? 0 - 1` to `list.map`, and a `??`
+  inside a mapped lambda segfaults under 0.9.0's LLVM back end; the fix
+  is on `main` after 0.9.0. The named function that worked around it is
+  gone, so the readers read as one expression each. `src/` builds on
+  0.9.0 unchanged.
 - **The conformance files are not vendored.** `BidiTest.txt` and
   `BidiCharacterTest.txt` are some five megabytes together. Six lines
   of the second and one block of the first are written out in the

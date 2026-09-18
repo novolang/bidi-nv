@@ -36,17 +36,9 @@ fn order_words(s: Str) -> [Str]
 fn expected_levels(line: Str) -> [Str]
     order_words(str.split(line, ";")[3])
 
-// One decimal field, or -1 when it is not a number.
-//
-// A named function rather than a lambda: a `??` inside a lambda passed
-// to `list.map` segfaults under LLVM — filed as
-// codegen-llvm/optional-unwrap-inside-a-lambda-segfaults.
-fn decimal_value(d: Str) -> Int
-    str.to_int(d) ?? 0 - 1
-
 // Field 5: the surviving characters, in visual order.
 fn expected_order(line: Str) -> [Int]
-    list.map(order_words(str.split(line, ";")[4]), decimal_value)
+    list.map(order_words(str.split(line, ";")[4]), d => str.to_int(d) ?? 0 - 1)
 
 @test
 fn test_the_conformance_columns_parse_and_are_the_published_shape() [io]

@@ -63,6 +63,22 @@ pub enum BidiError
     // entry point derives the level from the text and cannot.
     BidiLevelOutOfRange(level: Int)
 
+// The standard `Error` implementation, so a refused resolution is
+// reported by anything that reports errors.
+//
+// The wording is `bidierror.message`'s: lower case, the fact first and
+// no trailing stop.
+//
+// ```novo
+// use bidierror
+//
+// fn main() [io]
+//     println(BidiLevelOutOfRange(200).message())
+// ```
+impl Error for BidiError
+    fn message(self) -> Str
+        todo("bidi-nv.BidiError.message")
+
 // The refusal as a sentence, ending without a full stop, suitable for
 // a log line or an error message the caller composes.
 //

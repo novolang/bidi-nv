@@ -69,14 +69,6 @@ fn class_words(s: Str) -> [Str]
     let pieces = str.split(str.replace(str.trim(s), "\t", " "), " ")
     list.filter(pieces, piece => str.is_empty(piece) == false)
 
-// One decimal field, or -1 when it is not a number.
-//
-// A named function rather than a lambda: a `??` inside a lambda passed
-// to `list.map` segfaults under LLVM — filed as
-// codegen-llvm/optional-unwrap-inside-a-lambda-segfaults.
-fn decimal_value(d: Str) -> Int
-    str.to_int(d) ?? 0 - 1
-
 // The value after a directive's colon.
 fn directive_value(line: Str) -> Str
     let colon = str.index(line, ":") ?? 0 - 1
@@ -96,12 +88,12 @@ fn parse_class_test_block(lines: [Str]) -> [BidiClassVector]
         else
             if str.starts_with(line, "@Reorder:")
                 let ds = class_words(directive_value(line))
-                order = list.map(ds, decimal_value)
+                order = list.map(ds, d => str.to_int(d) ?? 0 - 1)
             else
                 let f = str.split(line, ";")
                 out = list.push(out, BidiClassVector {
                     classes: class_words(f[0]),
-                    bitset: decimal_value(str.trim(f[1])),
+                    bitset: str.to_int(str.trim(f[1])) ?? 0 - 1,
                     levels: levels,
                     order: order })
     out

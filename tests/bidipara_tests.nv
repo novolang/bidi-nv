@@ -74,23 +74,15 @@ fn hex_value(s: Str) -> Int
 fn char_words(s: Str) -> [Str]
     list.filter(str.split(str.trim(s), " "), piece => str.is_empty(piece) == false)
 
-// One decimal field, or -1 when it is not a number.
-//
-// A named function rather than a lambda: a `??` inside a lambda passed
-// to `list.map` segfaults under LLVM — filed as
-// codegen-llvm/optional-unwrap-inside-a-lambda-segfaults.
-fn decimal_value(d: Str) -> Int
-    str.to_int(d) ?? 0 - 1
-
 // One line of the file.
 fn parse_character_vector(line: Str) -> BidiCharVector
     let f = str.split(line, ";")
     BidiCharVector {
         codepoints: list.map(char_words(f[0]), hex_value),
-        base: decimal_value(str.trim(f[1])),
-        level: decimal_value(str.trim(f[2])),
+        base: str.to_int(str.trim(f[1])) ?? 0 - 1,
+        level: str.to_int(str.trim(f[2])) ?? 0 - 1,
         levels: char_words(f[3]),
-        order: list.map(char_words(f[4]), decimal_value) }
+        order: list.map(char_words(f[4]), d => str.to_int(d) ?? 0 - 1) }
 
 @test
 fn test_the_conformance_lines_parse_in_the_upstream_format() [io]
